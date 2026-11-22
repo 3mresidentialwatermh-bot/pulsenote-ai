@@ -48,8 +48,22 @@ function normalizeUnit(rawUnit) {
   return 'hours';
 }
 
+function normalizeSpokenNumbers(text) {
+  const wordToNum = {
+    one: '1', a: '1', an: '1',
+    two: '2', three: '3', four: '4', five: '5',
+    six: '6', seven: '7', eight: '8', nine: '9', ten: '10',
+    eleven: '11', twelve: '12', fifteen: '15', twenty: '20',
+    thirty: '30', forty: '40', 'forty-five': '45', fifty: '50', sixty: '60'
+  };
+  return text.replace(
+    /\b(forty-five|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty)\b(?=\s+(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks)\b)/gi,
+    (m) => wordToNum[m.toLowerCase()] || m
+  );
+}
+
 export function parseReminderLocally(rawText, referenceDate = new Date()) {
-  const input = (rawText || '').trim();
+  const input = normalizeSpokenNumbers((rawText || '').trim());
   if (!input) {
     return {
       title: 'Untitled Reminder',
@@ -154,9 +168,9 @@ export function parseReminderLocally(rawText, referenceDate = new Date()) {
   let parsedTimeText = '';
   let cleanedTitle = inputWithoutRepeat;
 
-  // 1. Check relative "in X sec/min/hours" or "X hours after"
+  // 1. Check relative "in X sec/min/hours" or "after X minutes" or "X hours after"
   const relMatch = inputWithoutRepeat.match(
-    /\bin\s+(\d+)\s*(s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours|d|day|days)\b/i
+    /\b(?:in|after|for)\s+(\d+)\s*(s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours|d|day|days)\b/i
   );
 
   // 2. Check explicit clock time like "tomorrow at 10:30 AM" or "at 5 PM"

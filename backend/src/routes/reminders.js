@@ -86,9 +86,9 @@ router.post('/', authenticateToken, upload.single('audio'), (req, res) => {
     if (req.file) {
       audioUrl = `/uploads/${req.file.filename}`;
     } else if (req.body.audioBase64) {
-      const matches = req.body.audioBase64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-      const base64Data = matches ? matches[2] : req.body.audioBase64;
-      const ext = req.body.audioExt || '.wav';
+      const commaIdx = req.body.audioBase64.indexOf(',');
+      const base64Data = commaIdx !== -1 ? req.body.audioBase64.slice(commaIdx + 1) : req.body.audioBase64;
+      const ext = req.body.audioExt || '.webm';
       const filename = `voice_${Date.now()}_${uuidv4().slice(0, 8)}${ext}`;
       fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(base64Data, 'base64'));
       audioUrl = `/uploads/${filename}`;

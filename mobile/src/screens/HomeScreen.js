@@ -103,6 +103,7 @@ export default function HomeScreen({ onNavigateTab }) {
 
   // Voice Note Recording state
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribingOnly, setIsTranscribingOnly] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordedAudioBase64, setRecordedAudioBase64] = useState(null);
   const [recordedAudioExt, setRecordedAudioExt] = useState('.webm');
@@ -116,6 +117,7 @@ export default function HomeScreen({ onNavigateTab }) {
   const audioChunksRef = useRef([]);
   const pendingAudioPromiseRef = useRef(null);
   const speechRecRef = useRef(null);
+  const latestTranscriptRef = useRef('');
 
   useEffect(() => {
     const trimmed = rawText.trim();
@@ -145,10 +147,11 @@ export default function HomeScreen({ onNavigateTab }) {
     setRecordingSeconds(0);
     audioChunksRef.current = [];
     pendingAudioPromiseRef.current = null;
+    latestTranscriptRef.current = '';
+    setRawText('');
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      // 1. Acquire physical microphone stream FIRST before starting SpeechRecognition
-      // (On Android Chrome, starting SpeechRecognition and getUserMedia simultaneously causes a mic lock failure)
+      // 1. Acquire physical microphone stream FIRST
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           setBannerError('Microphone access requires HTTPS or localhost.');
@@ -190,7 +193,7 @@ export default function HomeScreen({ onNavigateTab }) {
           }
         };
 
-        // Start recording with 250ms timeslice so chunks are captured continuously even for short voice notes
+        // Start recording with 250ms timeslice so chunks are captured continuously
         recorder.start(250);
         mediaRecorderRef.current = recorder;
         setIsRecording(true);
@@ -200,17 +203,13 @@ export default function HomeScreen({ onNavigateTab }) {
         }, 1000);
       } catch (err) {
         setBannerError(
-          `Microphone permission denied or unavailable (${err.message || 'Check browser mic settings'}). Using simulated voice note.`
+          `Microphone permission denied or unavailable (${err.message || 'Check browser mic settings'}).`
         );
-        setIsRecording(true);
-        recordingTimerRef.current = setInterval(() => {
-          setRecordingSeconds((s) => s + 1);
-        }, 1000);
+        return;
       }
 
-      // 2. Only launch live SpeechRecognition on desktop browsers (on Android, Chrome's SpeechRecognition steals the mic from MediaRecorder)
-      const isMobileBrowser = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
-      if (!isMobileBrowser) {
+      // 2. Start SpeechRecognition 150ms AFTER MediaRecorder has acquired the stream so live AI transcription works on both mobile & desktop
+      setTimeout(() => {
         try {
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
           if (SpeechRecognition) {
@@ -223,15 +222,20 @@ export default function HomeScreen({ onNavigateTab }) {
               for (let i = 0; i < event.results.length; i++) {
                 transcript += event.results[i][0].transcript + ' ';
               }
-              if (transcript.trim()) {
-                setRawText(transcript.trim());
+              const cleaned = transcript.trim();
+              if (cleaned) {
+                latestTranscriptRef.current = cleaned;
+                setRawText(cleaned);
               }
+            };
+            recognition.onerror = () => {
+              // Ignore if mobile OS limits simultaneous speech recognition while MediaRecorder is open
             };
             recognition.start();
             speechRecRef.current = recognition;
           }
         } catch (e) {}
-      }
+      }, 150);
       return;
     } else {
       try {
@@ -321,9 +325,7 @@ export default function HomeScreen({ onNavigateTab }) {
       }
 
       await audioPromise;
-      if (!rawText.trim()) {
-        setRawText('Voice Note Reminder in 30 seconds');
-      }
+      // Do NOT overwrite rawText with a fake hardcoded phrase! Keep the user's real spoken transcript or let them type/dictate in the box below.
       return;
     }
 
@@ -334,12 +336,54 @@ export default function HomeScreen({ onNavigateTab }) {
         setRecordedFileUri(uri);
       } catch (e) {}
       nativeRecordingRef.current = null;
-    } else {
-      setRecordedAudioBase64(generateSampleWavDataUri());
-      setRecordedAudioExt('.wav');
-      if (!rawText.trim()) {
-        setRawText('Voice Note: Remind me to drink water every 3 hours');
-      }
+    }
+  }
+
+  function startDedicatedSpeechToText() {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setBannerError('Tip: Tap the microphone icon on your phone keyboard to dictate into the transcript box.');
+      return;
+    }
+
+    if (isTranscribingOnly && speechRecRef.current) {
+      try {
+        speechRecRef.current.stop();
+      } catch (e) {}
+      setIsTranscribingOnly(false);
+      return;
+    }
+
+    try {
+      setBannerError('');
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      setIsTranscribingOnly(true);
+
+      recognition.onresult = (event) => {
+        let transcript = '';
+        for (let i = 0; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript + ' ';
+        }
+        const cleaned = transcript.trim();
+        if (cleaned) {
+          latestTranscriptRef.current = cleaned;
+          setRawText(cleaned);
+        }
+      };
+      recognition.onend = () => {
+        setIsTranscribingOnly(false);
+      };
+      recognition.onerror = () => {
+        setIsTranscribingOnly(false);
+      };
+      recognition.start();
+      speechRecRef.current = recognition;
+    } catch (e) {
+      setIsTranscribingOnly(false);
     }
   }
 
@@ -356,12 +400,14 @@ export default function HomeScreen({ onNavigateTab }) {
       latestBase64 = await pendingAudioPromiseRef.current;
     }
 
-    const textToParse =
-      rawText.trim() ||
-      (inputMode === 'voice' ? 'Voice Note Reminder in 30 seconds' : '');
+    const textToParse = (rawText.trim() || latestTranscriptRef.current.trim());
 
     if (!textToParse) {
-      setBannerError('Please enter a reminder message or record a voice note.');
+      setBannerError(
+        inputMode === 'voice'
+          ? 'Please speak or type your task in the transcript box below (or tap "AI Voice Dictate" / your keyboard mic) so the AI knows when to set the alarm!'
+          : 'Please enter a reminder message.'
+      );
       return;
     }
 
@@ -568,17 +614,48 @@ export default function HomeScreen({ onNavigateTab }) {
                 : 'Speak your reminder clearly into your phone microphone'}
             </Text>
             {(recordedAudioBase64 || recordedFileUri) && !isRecording && (
-              <TouchableOpacity
-                style={styles.previewVoiceBtn}
-                onPress={() =>
-                  playVoiceNoteUrl(recordedAudioBase64 || recordedFileUri)
-                }
-              >
-                <Ionicons name="play-circle" size={18} color="#F472B6" />
-                <Text style={styles.previewVoiceBtnText}>
-                  Preview Recorded Voice Note
-                </Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 10 }}>
+                <TouchableOpacity
+                  style={styles.previewVoiceBtn}
+                  onPress={() =>
+                    playVoiceNoteUrl(recordedAudioBase64 || recordedFileUri)
+                  }
+                >
+                  <Ionicons name="play-circle" size={18} color="#F472B6" />
+                  <Text style={styles.previewVoiceBtnText}>
+                    Preview Audio
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.previewVoiceBtn,
+                    {
+                      backgroundColor: isTranscribingOnly
+                        ? 'rgba(239,68,68,0.2)'
+                        : 'rgba(99,102,241,0.18)',
+                      borderColor: isTranscribingOnly ? '#EF4444' : '#818CF8'
+                    }
+                  ]}
+                  onPress={startDedicatedSpeechToText}
+                >
+                  <Ionicons
+                    name={isTranscribingOnly ? 'radio' : 'sparkles'}
+                    size={16}
+                    color={isTranscribingOnly ? '#FCA5A5' : '#A5B4FC'}
+                  />
+                  <Text
+                    style={[
+                      styles.previewVoiceBtnText,
+                      { color: isTranscribingOnly ? '#FCA5A5' : '#A5B4FC' }
+                    ]}
+                  >
+                    {isTranscribingOnly
+                      ? 'Listening... Speak Now'
+                      : 'AI Voice-to-Text Dictate'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         )}
