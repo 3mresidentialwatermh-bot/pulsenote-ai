@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulsenote-offline-v3';
+const CACHE_NAME = 'pulsenote-offline-v4';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const PRECACHE_URLS = [
   '/icon-512.png',
   '/icon.png',
   '/favicon.ico',
-  '/_expo/static/js/web/index-d40151ce16176187746cb81493a9550b.js'
+  '/_expo/static/js/web/index-3391c34c25181b05850cb46abae0b986.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -18,7 +18,11 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
 });
 
 self.addEventListener('fetch', (event) => {

@@ -105,12 +105,16 @@ export default function HomeScreen({ onNavigateTab }) {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordedAudioBase64, setRecordedAudioBase64] = useState(null);
+  const [recordedAudioExt, setRecordedAudioExt] = useState('.webm');
   const [recordedFileUri, setRecordedFileUri] = useState(null);
   const [playingId, setPlayingId] = useState(null);
 
   const recordingTimerRef = useRef(null);
   const nativeRecordingRef = useRef(null);
   const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const pendingAudioPromiseRef = useRef(null);
   const speechRecRef = useRef(null);
 
   useEffect(() => {
@@ -139,56 +143,96 @@ export default function HomeScreen({ onNavigateTab }) {
     setRecordedAudioBase64(null);
     setRecordedFileUri(null);
     setRecordingSeconds(0);
-    setIsRecording(true);
-
-    recordingTimerRef.current = setInterval(() => {
-      setRecordingSeconds((s) => s + 1);
-    }, 1000);
+    audioChunksRef.current = [];
+    pendingAudioPromiseRef.current = null;
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      // 1. Acquire physical microphone stream FIRST before starting SpeechRecognition
+      // (On Android Chrome, starting SpeechRecognition and getUserMedia simultaneously causes a mic lock failure)
       try {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (SpeechRecognition) {
-          const recognition = new SpeechRecognition();
-          recognition.continuous = true;
-          recognition.interimResults = true;
-          recognition.lang = 'en-US';
-          recognition.onresult = (event) => {
-            let transcript = '';
-            for (let i = 0; i < event.results.length; i++) {
-              transcript += event.results[i][0].transcript + ' ';
-            }
-            if (transcript.trim()) {
-              setRawText(transcript.trim());
-            }
-          };
-          recognition.start();
-          speechRecRef.current = recognition;
-        }
-      } catch (e) {}
-
-      try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const chunks = [];
-          const recorder = new window.MediaRecorder(stream);
-          recorder.ondataavailable = (ev) => {
-            if (ev.data.size > 0) chunks.push(ev.data);
-          };
-          recorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'audio/webm' });
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              setRecordedAudioBase64(reader.result);
-            };
-            reader.readAsDataURL(blob);
-            stream.getTracks().forEach((t) => t.stop());
-          };
-          recorder.start();
-          mediaRecorderRef.current = recorder;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setBannerError('Microphone access requires HTTPS or localhost.');
           return;
         }
-      } catch (err) {}
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        mediaStreamRef.current = stream;
+
+        let mimeType = '';
+        let ext = '.webm';
+        if (typeof window.MediaRecorder !== 'undefined') {
+          if (window.MediaRecorder.isTypeSupported && window.MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+            mimeType = 'audio/webm;codecs=opus';
+            ext = '.webm';
+          } else if (window.MediaRecorder.isTypeSupported && window.MediaRecorder.isTypeSupported('audio/mp4')) {
+            mimeType = 'audio/mp4';
+            ext = '.m4a';
+          } else if (window.MediaRecorder.isTypeSupported && window.MediaRecorder.isTypeSupported('audio/webm')) {
+            mimeType = 'audio/webm';
+            ext = '.webm';
+          }
+        }
+        setRecordedAudioExt(ext);
+
+        const recorder = mimeType
+          ? new window.MediaRecorder(stream, { mimeType })
+          : new window.MediaRecorder(stream);
+
+        recorder.ondataavailable = (ev) => {
+          if (ev.data && ev.data.size > 0) {
+            audioChunksRef.current.push(ev.data);
+          }
+        };
+
+        // Start recording with 250ms timeslice so chunks are captured continuously even for short voice notes
+        recorder.start(250);
+        mediaRecorderRef.current = recorder;
+        setIsRecording(true);
+
+        recordingTimerRef.current = setInterval(() => {
+          setRecordingSeconds((s) => s + 1);
+        }, 1000);
+      } catch (err) {
+        setBannerError(
+          `Microphone permission denied or unavailable (${err.message || 'Check browser mic settings'}). Using simulated voice note.`
+        );
+        setIsRecording(true);
+        recordingTimerRef.current = setInterval(() => {
+          setRecordingSeconds((s) => s + 1);
+        }, 1000);
+      }
+
+      // 2. Only launch live SpeechRecognition on desktop browsers (on Android, Chrome's SpeechRecognition steals the mic from MediaRecorder)
+      const isMobileBrowser = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+      if (!isMobileBrowser) {
+        try {
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          if (SpeechRecognition) {
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'en-US';
+            recognition.onresult = (event) => {
+              let transcript = '';
+              for (let i = 0; i < event.results.length; i++) {
+                transcript += event.results[i][0].transcript + ' ';
+              }
+              if (transcript.trim()) {
+                setRawText(transcript.trim());
+              }
+            };
+            recognition.start();
+            speechRecRef.current = recognition;
+          }
+        } catch (e) {}
+      }
+      return;
     } else {
       try {
         const perm = await Audio.requestPermissionsAsync();
@@ -201,9 +245,17 @@ export default function HomeScreen({ onNavigateTab }) {
             Audio.RecordingOptionsPresets.HIGH_QUALITY
           );
           nativeRecordingRef.current = recording;
+          setIsRecording(true);
+          recordingTimerRef.current = setInterval(() => {
+            setRecordingSeconds((s) => s + 1);
+          }, 1000);
           return;
+        } else {
+          setBannerError('Microphone permission was not granted.');
         }
-      } catch (err) {}
+      } catch (err) {
+        setBannerError('Could not start native audio recorder.');
+      }
     }
   }
 
@@ -222,12 +274,55 @@ export default function HomeScreen({ onNavigateTab }) {
     }
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch (e) {}
+      const recorder = mediaRecorderRef.current;
       mediaRecorderRef.current = null;
+
+      const audioPromise = new Promise((resolve) => {
+        recorder.onstop = () => {
+          try {
+            const blobType = recorder.mimeType || (recordedAudioExt === '.m4a' ? 'audio/mp4' : 'audio/webm');
+            const blob = new Blob(audioChunksRef.current, { type: blobType });
+            if (mediaStreamRef.current) {
+              mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+              mediaStreamRef.current = null;
+            }
+            if (blob.size === 0) {
+              const fallback = generateSampleWavDataUri();
+              setRecordedAudioBase64(fallback);
+              setRecordedAudioExt('.wav');
+              resolve(fallback);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64Data = reader.result;
+              setRecordedAudioBase64(base64Data);
+              resolve(base64Data);
+            };
+            reader.onerror = () => {
+              const fallback = generateSampleWavDataUri();
+              setRecordedAudioBase64(fallback);
+              resolve(fallback);
+            };
+            reader.readAsDataURL(blob);
+          } catch (e) {
+            const fallback = generateSampleWavDataUri();
+            setRecordedAudioBase64(fallback);
+            resolve(fallback);
+          }
+        };
+      });
+
+      pendingAudioPromiseRef.current = audioPromise;
+      try {
+        recorder.stop();
+      } catch (e) {
+        pendingAudioPromiseRef.current = null;
+      }
+
+      await audioPromise;
       if (!rawText.trim()) {
-        setRawText('Remind me to review the client proposal in 30 seconds');
+        setRawText('Voice Note Reminder in 30 seconds');
       }
       return;
     }
@@ -241,6 +336,7 @@ export default function HomeScreen({ onNavigateTab }) {
       nativeRecordingRef.current = null;
     } else {
       setRecordedAudioBase64(generateSampleWavDataUri());
+      setRecordedAudioExt('.wav');
       if (!rawText.trim()) {
         setRawText('Voice Note: Remind me to drink water every 3 hours');
       }
@@ -250,6 +346,15 @@ export default function HomeScreen({ onNavigateTab }) {
   async function handleSaveReminder() {
     setBannerError('');
     setBannerSuccess('');
+
+    // If user is still recording when they tap Save, stop and finalize the recording first
+    let latestBase64 = recordedAudioBase64;
+    if (isRecording) {
+      await stopVoiceRecording();
+    }
+    if (pendingAudioPromiseRef.current) {
+      latestBase64 = await pendingAudioPromiseRef.current;
+    }
 
     const textToParse =
       rawText.trim() ||
@@ -271,7 +376,7 @@ export default function HomeScreen({ onNavigateTab }) {
       const isVoice = inputMode === 'voice';
       const audioBase64ToUse =
         isVoice && !recordedFileUri
-          ? recordedAudioBase64 || generateSampleWavDataUri()
+          ? latestBase64 || recordedAudioBase64 || generateSampleWavDataUri()
           : null;
 
       const result = await createReminder({
@@ -286,7 +391,7 @@ export default function HomeScreen({ onNavigateTab }) {
         subtasks: parsedSubtasks,
         inputType: isVoice ? 'voice' : 'text',
         audioBase64: audioBase64ToUse,
-        audioExt: '.wav',
+        audioExt: latestBase64 || recordedAudioBase64 ? recordedAudioExt : '.wav',
         audioDuration: recordingSeconds || 4,
         audioFileUri: recordedFileUri
       });
@@ -452,14 +557,29 @@ export default function HomeScreen({ onNavigateTab }) {
             </TouchableOpacity>
             <Text style={styles.voiceInstruction}>
               {isRecording
-                ? `Recording Voice Note... (${recordingSeconds}s) — Tap to Stop`
+                ? `🔴 Recording Voice Note... (${recordingSeconds}s) — Tap to Stop`
                 : recordedAudioBase64 || recordedFileUri
                 ? `Voice Note Captured (${recordingSeconds || 4}s) ✓`
                 : 'Tap Microphone to Record Voice Note'}
             </Text>
             <Text style={styles.voiceSubHint}>
-              Speak your task, repeat interval, or location trigger
+              {recordedAudioBase64 || recordedFileUri
+                ? 'Tap Preview below to listen to your recording before saving'
+                : 'Speak your reminder clearly into your phone microphone'}
             </Text>
+            {(recordedAudioBase64 || recordedFileUri) && !isRecording && (
+              <TouchableOpacity
+                style={styles.previewVoiceBtn}
+                onPress={() =>
+                  playVoiceNoteUrl(recordedAudioBase64 || recordedFileUri)
+                }
+              >
+                <Ionicons name="play-circle" size={18} color="#F472B6" />
+                <Text style={styles.previewVoiceBtnText}>
+                  Preview Recorded Voice Note
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -1205,6 +1325,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     textAlign: 'center'
+  },
+  previewVoiceBtn: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(244,114,182,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(244,114,182,0.4)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999
+  },
+  previewVoiceBtnText: {
+    color: '#F472B6',
+    fontSize: 13,
+    fontWeight: '700'
   },
   textInput: {
     backgroundColor: '#0F172A',
