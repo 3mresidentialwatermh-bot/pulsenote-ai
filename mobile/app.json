@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "PulseNote AI",
+    "slug": "pulsenote-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pulsenote.ai",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "PulseNote AI needs microphone access to record voice note reminders."
+      }
+    },
+    "android": {
+      "package": "com.pulsenote.ai",
+      "permissions": [
+        "RECORD_AUDIO",
+        "VIBRATE"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#1E1B4B",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "name": "PulseNote AI Reminder",
+      "shortName": "PulseNote",
+      "themeColor": "#1E1B4B",
+      "backgroundColor": "#0F172A",
+      "display": "standalone"
+    }
+  }
+}

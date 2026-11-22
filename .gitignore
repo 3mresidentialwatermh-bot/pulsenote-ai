@@ -1,0 +1,8 @@
+node_modules/
+backend/node_modules/
+mobile/node_modules/
+mobile/.expo/
+backend/data/*.db*
+backend/uploads/*
+.env
+*.log
