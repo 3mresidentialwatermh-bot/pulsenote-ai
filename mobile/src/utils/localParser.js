@@ -56,10 +56,77 @@ function normalizeSpokenNumbers(text) {
     eleven: '11', twelve: '12', fifteen: '15', twenty: '20',
     thirty: '30', forty: '40', 'forty-five': '45', fifty: '50', sixty: '60'
   };
-  return text.replace(
-    /\b(forty-five|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty)\b(?=\s+(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks)\b)/gi,
+
+  let normalized = text
+    // 1. Convert dot-separated times like "7.30" or "7.30 pm" into "7:30"
+    .replace(/\b(\d{1,2})\.(\d{2})\b/g, '$1:$2')
+    // 2. Convert space-separated spoken clock times like "at 7 30" or "by 7 30" into "at 7:30"
+    .replace(/\b(at|by|for|around|alarm)\s+(\d{1,2})\s+([0-5]\d)\b/gi, '$1 $2:$3')
+    // 3. Convert spoken "seven thirty" into "7:30"
+    .replace(
+      /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(fifteen|twenty|thirty|forty|forty-five|fifty)\b/gi,
+      (_, h, m) => `${wordToNum[h.toLowerCase()]}:${wordToNum[m.toLowerCase()]}`
+    );
+
+  // 4. Convert spoken numbers before time units ("three hours" -> "3 hours")
+  return normalized.replace(
+    /\b(forty-five|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty)\b(?=\s+(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|am|pm|o'clock)\b)/gi,
     (m) => wordToNum[m.toLowerCase()] || m
   );
+}
+
+function parseExplicitClockTime(text, referenceDate) {
+  const clockRegex = /\b(tomorrow\s+)?(?:(?:at|by|for|around|alarm)\s+)?(\d{1,2})(?::([0-5]\d))?(?:\s*(am|pm))?\b/i;
+  // Require either a colon (e.g. "7:30"), an am/pm suffix (e.g. "7 pm"), or a time preposition ("at 7", "by 7")
+  const strictClockRegex = /\b(tomorrow\s+)?(?:(?:(?:at|by|for|around)\s+)(\d{1,2})(?::([0-5]\d))?(?:\s*(am|pm))?|(\d{1,2}):([0-5]\d)(?:\s*(am|pm))?|(\d{1,2})(?::([0-5]\d))?\s*(am|pm))\b/i;
+  const m = text.match(strictClockRegex);
+  if (!m) return null;
+
+  const isTomorrow = !!m[1];
+  const hoursRaw = m[2] || m[5] || m[8];
+  const minsRaw = m[3] || m[6] || m[9] || '0';
+  const meridiemRaw = m[4] || m[7] || m[10] || null;
+
+  let hours = parseInt(hoursRaw, 10);
+  const mins = parseInt(minsRaw, 10);
+  const meridiem = meridiemRaw ? meridiemRaw.toLowerCase() : null;
+
+  if (isNaN(hours) || hours > 23) return null;
+
+  const candidate = new Date(referenceDate);
+  if (meridiem) {
+    if (meridiem === 'pm' && hours < 12) hours += 12;
+    if (meridiem === 'am' && hours === 12) hours = 0;
+    candidate.setHours(hours, mins, 0, 0);
+    if (isTomorrow || candidate.getTime() <= referenceDate.getTime()) {
+      candidate.setDate(candidate.getDate() + 1);
+    }
+    return { date: candidate, matchedText: m[0] };
+  } else if (hours <= 12) {
+    const amDate = new Date(referenceDate);
+    amDate.setHours(hours === 12 ? 0 : hours, mins, 0, 0);
+    if (amDate.getTime() <= referenceDate.getTime()) {
+      amDate.setDate(amDate.getDate() + 1);
+    }
+
+    const pmDate = new Date(referenceDate);
+    pmDate.setHours(hours === 12 ? 12 : hours + 12, mins, 0, 0);
+    if (pmDate.getTime() <= referenceDate.getTime()) {
+      pmDate.setDate(pmDate.getDate() + 1);
+    }
+
+    const chosen = amDate.getTime() < pmDate.getTime() ? amDate : pmDate;
+    if (isTomorrow) {
+      chosen.setDate(chosen.getDate() + 1);
+    }
+    return { date: chosen, matchedText: m[0] };
+  } else {
+    candidate.setHours(hours, mins, 0, 0);
+    if (isTomorrow || candidate.getTime() <= referenceDate.getTime()) {
+      candidate.setDate(candidate.getDate() + 1);
+    }
+    return { date: candidate, matchedText: m[0] };
+  }
 }
 
 export function parseReminderLocally(rawText, referenceDate = new Date()) {
@@ -173,10 +240,8 @@ export function parseReminderLocally(rawText, referenceDate = new Date()) {
     /\b(?:in|after|for)\s+(\d+)\s*(s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours|d|day|days)\b/i
   );
 
-  // 2. Check explicit clock time like "tomorrow at 10:30 AM" or "at 5 PM"
-  const timeMatch = inputWithoutRepeat.match(
-    /\b(tomorrow\s+)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i
-  );
+  // 2. Check explicit clock time like "tomorrow at 10:30 AM", "at 5 PM", "by 7.30", "at 7:30"
+  const explicitClock = parseExplicitClockTime(inputWithoutRepeat, referenceDate);
 
   if (relMatch) {
     const count = parseInt(relMatch[1], 10);
@@ -192,21 +257,10 @@ export function parseReminderLocally(rawText, referenceDate = new Date()) {
     scheduledDate = new Date(referenceDate.getTime() + meta.intervalMs);
     parsedTimeText = afterMatch[0];
     cleanedTitle = inputWithoutRepeat.replace(afterMatch[0], '').trim();
-  } else if (timeMatch) {
-    const isTomorrow = !!timeMatch[1];
-    let hours = parseInt(timeMatch[2], 10);
-    const mins = timeMatch[3] ? parseInt(timeMatch[3], 10) : 0;
-    const ampm = timeMatch[4].toLowerCase();
-    if (ampm === 'pm' && hours < 12) hours += 12;
-    if (ampm === 'am' && hours === 12) hours = 0;
-
-    scheduledDate = new Date(referenceDate);
-    scheduledDate.setHours(hours, mins, 0, 0);
-    if (isTomorrow || scheduledDate.getTime() <= referenceDate.getTime()) {
-      scheduledDate.setDate(scheduledDate.getDate() + 1);
-    }
-    parsedTimeText = timeMatch[0];
-    cleanedTitle = inputWithoutRepeat.replace(timeMatch[0], '').trim();
+  } else if (explicitClock) {
+    scheduledDate = explicitClock.date;
+    parsedTimeText = explicitClock.matchedText;
+    cleanedTitle = inputWithoutRepeat.replace(explicitClock.matchedText, '').trim();
   } else if (repeatMeta.isRecurring) {
     scheduledDate = new Date(referenceDate.getTime() + repeatMeta.intervalMs);
     parsedTimeText = `${repeatMeta.label} (next in ${repeatMeta.label.replace(/^Every\s+/i, '')})`;

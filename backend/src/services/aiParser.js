@@ -148,10 +148,86 @@ function normalizeSpokenNumbers(text) {
     eleven: '11', twelve: '12', fifteen: '15', twenty: '20',
     thirty: '30', forty: '40', 'forty-five': '45', fifty: '50', sixty: '60'
   };
-  return text.replace(
-    /\b(forty-five|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty)\b(?=\s+(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks)\b)/gi,
+
+  let normalized = text
+    // 1. Convert dot-separated times like "7.30" or "7.30 pm" or "at 7.30" into "7:30"
+    .replace(/\b(\d{1,2})\.(\d{2})\b/g, '$1:$2')
+    // 2. Convert space-separated spoken clock times like "at 7 30" or "by 7 30" into "at 7:30"
+    .replace(/\b(at|by|for|around|alarm)\s+(\d{1,2})\s+([0-5]\d)\b/gi, '$1 $2:$3')
+    // 3. Convert spoken "seven thirty" into "7:30"
+    .replace(
+      /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(fifteen|twenty|thirty|forty|forty-five|fifty)\b/gi,
+      (_, h, m) => `${wordToNum[h.toLowerCase()]}:${wordToNum[m.toLowerCase()]}`
+    );
+
+  // 4. Convert spoken numbers before time units ("three hours" -> "3 hours")
+  normalized = normalized.replace(
+    /\b(forty-five|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty)\b(?=\s+(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|am|pm|o'clock)\b)/gi,
     (m) => wordToNum[m.toLowerCase()] || m
   );
+
+  // 5. If user says "at 7:30" or "by 7:30" without AM/PM, pick the nearest upcoming 7:30 (AM or PM)
+  return normalized;
+}
+
+/**
+ * Resolves bare clock times like "alarm by 7:30" or "at 7:30" (without AM/PM)
+ * to the nearest upcoming occurrence (within the next 12 hours), instead of defaulting to 1 minute.
+ */
+function parseExplicitClockTime(text, referenceDate) {
+  const clockRegex = /\b(tomorrow\s+)?(?:(?:at|by|for|around|alarm)\s+)?(\d{1,2}):([0-5]\d)(?:\s*(am|pm))?\b/i;
+  const m = text.match(clockRegex);
+  if (!m) return null;
+
+  const isTomorrow = !!m[1];
+  let hours = parseInt(m[2], 10);
+  const mins = parseInt(m[3], 10);
+  const meridiem = m[4] ? m[4].toLowerCase() : null;
+
+  if (hours > 23) return null;
+
+  const candidate = new Date(referenceDate);
+  if (meridiem) {
+    if (meridiem === 'pm' && hours < 12) hours += 12;
+    if (meridiem === 'am' && hours === 12) hours = 0;
+    candidate.setHours(hours, mins, 0, 0);
+    if (isTomorrow || candidate.getTime() <= referenceDate.getTime()) {
+      candidate.setDate(candidate.getDate() + 1);
+    }
+  } else if (hours <= 12) {
+    // No AM/PM specified (e.g. "alarm by 7.30"): try AM and PM and pick the soonest upcoming slot!
+    const amDate = new Date(referenceDate);
+    amDate.setHours(hours === 12 ? 0 : hours, mins, 0, 0);
+    if (amDate.getTime() <= referenceDate.getTime()) {
+      amDate.setDate(amDate.getDate() + 1);
+    }
+
+    const pmDate = new Date(referenceDate);
+    pmDate.setHours(hours === 12 ? 12 : hours + 12, mins, 0, 0);
+    if (pmDate.getTime() <= referenceDate.getTime()) {
+      pmDate.setDate(pmDate.getDate() + 1);
+    }
+
+    const chosen = amDate.getTime() < pmDate.getTime() ? amDate : pmDate;
+    if (isTomorrow) {
+      chosen.setDate(chosen.getDate() + 1);
+    }
+    return {
+      date: chosen,
+      matchedText: m[0]
+    };
+  } else {
+    // 24-hour time like 19:30
+    candidate.setHours(hours, mins, 0, 0);
+    if (isTomorrow || candidate.getTime() <= referenceDate.getTime()) {
+      candidate.setDate(candidate.getDate() + 1);
+    }
+  }
+
+  return {
+    date: candidate,
+    matchedText: m[0]
+  };
 }
 
 function parseReminderInput(rawText, referenceDate = new Date()) {
@@ -232,13 +308,18 @@ function parseReminderInput(rawText, referenceDate = new Date()) {
     ? input.replace(matchedRepeatPhrase, ' ')
     : input;
 
+  const explicitClock = parseExplicitClockTime(inputWithoutRepeat, referenceDate);
   const results = chrono.parse(inputWithoutRepeat, referenceDate, { forwardDate: true });
 
   let scheduledDate = null;
   let parsedTimeText = '';
   let cleanedTitle = inputWithoutRepeat;
 
-  if (results && results.length > 0) {
+  if (explicitClock && (!results.length || !/\b(am|pm|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(results[0].text))) {
+    scheduledDate = explicitClock.date;
+    parsedTimeText = explicitClock.matchedText;
+    cleanedTitle = inputWithoutRepeat.replace(explicitClock.matchedText, ' ').trim();
+  } else if (results && results.length > 0) {
     const match = results[0];
     scheduledDate = match.start.date();
     parsedTimeText = match.text;
