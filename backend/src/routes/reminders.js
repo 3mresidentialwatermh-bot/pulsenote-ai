@@ -115,59 +115,117 @@ router.post('/', authenticateToken, upload.single('audio'), (req, res) => {
       : (req.body.subtasksJson || '[]');
     const audioDuration = parseInt(req.body.audioDuration || '0', 10);
 
-    // Apply Quiet Hours adjustment if enabled on user profile
-    const qh = applyQuietHours(new Date(scheduledAt), user);
-    if (qh.wasAdjusted) {
-      scheduledAt = qh.adjustedDate.toISOString();
+    // Support multiple daily time slots for the same activity (either from UI multiTimes array or AI parser)
+    let rawMultiTimes = [];
+    if (Array.isArray(req.body.multiTimes)) {
+      rawMultiTimes = req.body.multiTimes;
+    } else if (typeof req.body.multiTimes === 'string' && req.body.multiTimes.trim()) {
+      try {
+        rawMultiTimes = JSON.parse(req.body.multiTimes);
+      } catch (e) {
+        rawMultiTimes = req.body.multiTimes.split(',').map((s) => s.trim()).filter(Boolean);
+      }
+    } else if (Array.isArray(aiParsed.multiTimes) && aiParsed.multiTimes.length > 1) {
+      rawMultiTimes = aiParsed.multiTimes;
     }
 
-    const id = uuidv4();
+    // Build list of target schedule timestamps (1 for single alarm, N for multi-time daily schedule)
+    const scheduleSlots = [];
+    if (rawMultiTimes.length > 0) {
+      for (const slot of rawMultiTimes) {
+        const m = String(slot).trim().match(/^(\d{1,2})[:.](\d{2})(?:\s*(am|pm))?$/i);
+        if (m) {
+          let h = parseInt(m[1], 10);
+          const mins = parseInt(m[2], 10);
+          const mer = (m[3] || '').toLowerCase();
+          if (mer === 'pm' && h < 12) h += 12;
+          if (mer === 'am' && h === 12) h = 0;
+          const d = new Date(refDate);
+          d.setHours(h, mins, 0, 0);
+          if (d.getTime() <= refDate.getTime()) {
+            d.setDate(d.getDate() + 1);
+          }
+          scheduleSlots.push({
+            iso: d.toISOString(),
+            label: `${String(h).padStart(2, '0')}:${String(mins).padStart(2, '0')}`
+          });
+        }
+      }
+    }
+
+    if (scheduleSlots.length === 0) {
+      scheduleSlots.push({ iso: scheduledAt, label: null });
+    }
+
     const now = new Date().toISOString();
     const inputType = isVoice ? 'voice' : 'text';
+    const effectiveRepeat = scheduleSlots.length > 1 && repeatRule === 'none' ? 'daily' : repeatRule;
+    const createdReminders = [];
+    let anyQuietHoursAdjusted = false;
 
-    db.prepare(`
+    const insertStmt = db.prepare(`
       INSERT INTO reminders (
         id, user_id, title, raw_input, input_type, audio_url, audio_duration,
         scheduled_at, status, priority, category, snooze_count, repeat_rule,
         action_link, location_trigger, subtasks_json, assigned_to_email,
         require_proof, tts_enabled, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id, user.id, title, rawInput, inputType, audioUrl, audioDuration,
-      scheduledAt, priority, category, repeatRule,
-      actionLink, locationTrigger, subtasksJson, assignedToEmail,
-      requireProof, ttsEnabled, now, now
-    );
+    `);
+
+    for (let idx = 0; idx < scheduleSlots.length; idx++) {
+      let slotIso = scheduleSlots[idx].iso;
+      const qh = applyQuietHours(new Date(slotIso), user);
+      if (qh.wasAdjusted) {
+        slotIso = qh.adjustedDate.toISOString();
+        anyQuietHoursAdjusted = true;
+      }
+
+      const id = uuidv4();
+      const slotTitle =
+        scheduleSlots.length > 1 && scheduleSlots[idx].label
+          ? `${title} (${scheduleSlots[idx].label})`
+          : title;
+
+      insertStmt.run(
+        id, user.id, slotTitle, rawInput, inputType, audioUrl, audioDuration,
+        slotIso, priority, category, effectiveRepeat,
+        actionLink, locationTrigger, subtasksJson, assignedToEmail,
+        requireProof, ttsEnabled, now, now
+      );
+
+      const extraNotes = [];
+      if (scheduleSlots.length > 1) extraNotes.push(`Multi-Time Slot ${idx + 1}/${scheduleSlots.length}`);
+      if (category && category !== 'general') extraNotes.push(`Category: ${category.toUpperCase()}`);
+      if (effectiveRepeat && effectiveRepeat !== 'none') extraNotes.push(`Repeat: ${getRepeatRuleMeta(effectiveRepeat).label}`);
+      if (locationTrigger) extraNotes.push(`GPS Trigger: ${locationTrigger}`);
+      if (assignedToEmail) extraNotes.push(`Delegated to: ${assignedToEmail}`);
+
+      createLogEntry({
+        reminderId: id,
+        userId: user.id,
+        reminderTitle: slotTitle,
+        inputType,
+        audioUrl,
+        action: 'created',
+        details: `Scheduled for ${new Date(slotIso).toLocaleString()} via ${inputType.toUpperCase()}${extraNotes.length ? ' • ' + extraNotes.join(' | ') : ''}`
+      });
+
+      createdReminders.push(db.prepare('SELECT * FROM reminders WHERE id = ?').get(id));
+    }
 
     if (isVoice) {
       db.prepare('UPDATE users SET voice_quota_used = voice_quota_used + 1 WHERE id = ?').run(user.id);
     }
 
-    const extraNotes = [];
-    if (category && category !== 'general') extraNotes.push(`Category: ${category.toUpperCase()}`);
-    if (repeatRule && repeatRule !== 'none') extraNotes.push(`Repeat: ${getRepeatRuleMeta(repeatRule).label}`);
-    if (locationTrigger) extraNotes.push(`GPS Trigger: ${locationTrigger}`);
-    if (assignedToEmail) extraNotes.push(`Delegated to: ${assignedToEmail}`);
-    if (qh.wasAdjusted) extraNotes.push(`Adjusted for Quiet Hours (${user.quiet_hours_start}-${user.quiet_hours_end})`);
-
-    createLogEntry({
-      reminderId: id,
-      userId: user.id,
-      reminderTitle: title,
-      inputType,
-      audioUrl,
-      action: 'created',
-      details: `Scheduled for ${new Date(scheduledAt).toLocaleString()} via ${inputType.toUpperCase()}${extraNotes.length ? ' • ' + extraNotes.join(' | ') : ''}`
-    });
-
-    const created = db.prepare('SELECT * FROM reminders WHERE id = ?').get(id);
     const updatedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
     delete updatedUser.password_hash;
 
     res.status(201).json({
-      reminder: created,
+      reminder: createdReminders[0],
+      reminders: createdReminders,
+      count: createdReminders.length,
       parsed: aiParsed,
-      quietHoursAdjusted: qh.wasAdjusted,
+      quietHoursAdjusted: anyQuietHoursAdjusted,
       user: updatedUser
     });
   } catch (err) {

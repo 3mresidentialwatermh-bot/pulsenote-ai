@@ -265,6 +265,7 @@ export function ReminderProvider({ children }) {
     rawInput,
     title,
     scheduledAt,
+    multiTimes,
     priority,
     category,
     repeatRule,
@@ -290,6 +291,7 @@ export function ReminderProvider({ children }) {
           formData.append('rawInput', rawInput || 'Voice Note Reminder');
           if (title) formData.append('title', title);
           if (scheduledAt) formData.append('scheduledAt', scheduledAt);
+          if (multiTimes && multiTimes.length) formData.append('multiTimes', JSON.stringify(multiTimes));
           if (priority) formData.append('priority', priority);
           if (category) formData.append('category', category);
           if (repeatRule) formData.append('repeatRule', repeatRule);
@@ -317,6 +319,7 @@ export function ReminderProvider({ children }) {
             rawInput,
             title,
             scheduledAt,
+            multiTimes,
             priority,
             category,
             repeatRule,
@@ -357,42 +360,95 @@ export function ReminderProvider({ children }) {
       setIsOffline(true);
     }
 
-    // Offline-First On-Device Creation!
-    const aiParsed = parseReminderLocally(rawInput, new Date());
-    const nowIso = new Date().toISOString();
-    const localReminder = {
-      id: `local_rem_${Date.now()}`,
-      user_id: user?.id || 'local',
-      title: (title || '').trim() || aiParsed.title,
-      raw_input: rawInput,
-      input_type: inputType,
-      audio_url: audioBase64 || audioFileUri || null,
-      audio_duration: audioDuration || 0,
-      scheduled_at: scheduledAt || aiParsed.scheduledAt,
-      status: 'pending',
-      priority: priority || aiParsed.priority || 'medium',
-      category: category || aiParsed.category || 'general',
-      snooze_count: 0,
-      repeat_rule: repeatRule || aiParsed.repeatRule || 'none',
-      action_link: actionLink !== undefined ? actionLink : (aiParsed.actionLink || ''),
-      location_trigger: locationTrigger !== undefined ? locationTrigger : (aiParsed.locationTrigger || ''),
-      subtasks_json: JSON.stringify(subtasks || []),
-      assigned_to_email: assignedToEmail !== undefined ? assignedToEmail : (aiParsed.assignedToEmail || ''),
-      require_proof: requireProof !== undefined ? (requireProof ? 1 : 0) : (aiParsed.requireProof ? 1 : 0),
-      tts_enabled: ttsEnabled !== undefined ? (ttsEnabled ? 1 : 0) : 1,
-      created_at: nowIso,
-      updated_at: nowIso
+    // Offline-First On-Device Creation (supports single or multi-time daily schedule!)
+    const refNow = new Date();
+    const aiParsed = parseReminderLocally(rawInput, refNow);
+    const nowIso = refNow.toISOString();
+    const baseTitle = (title || '').trim() || aiParsed.title;
+
+    const effectiveMulti = Array.isArray(multiTimes) && multiTimes.length > 0
+      ? multiTimes
+      : (Array.isArray(aiParsed.multiTimes) && aiParsed.multiTimes.length > 1 ? aiParsed.multiTimes : []);
+
+    const slotsToCreate = [];
+    if (effectiveMulti.length > 0) {
+      for (const slot of effectiveMulti) {
+        const m = String(slot).trim().match(/^(\d{1,2})[:.](\d{2})(?:\s*(am|pm))?$/i);
+        if (m) {
+          let h = parseInt(m[1], 10);
+          const mins = parseInt(m[2], 10);
+          const mer = (m[3] || '').toLowerCase();
+          if (mer === 'pm' && h < 12) h += 12;
+          if (mer === 'am' && h === 12) h = 0;
+          const d = new Date(refNow);
+          d.setHours(h, mins, 0, 0);
+          if (d.getTime() <= refNow.getTime()) d.setDate(d.getDate() + 1);
+          slotsToCreate.push({
+            iso: d.toISOString(),
+            label: `${String(h).padStart(2, '0')}:${String(mins).padStart(2, '0')}`
+          });
+        }
+      }
+    }
+
+    if (slotsToCreate.length === 0) {
+      slotsToCreate.push({ iso: scheduledAt || aiParsed.scheduledAt, label: null });
+    }
+
+    const createdLocal = [];
+    let currentLogs = logs;
+    const effectiveRepeat =
+      slotsToCreate.length > 1 && (!repeatRule || repeatRule === 'none')
+        ? 'daily'
+        : (repeatRule || aiParsed.repeatRule || 'none');
+
+    for (let idx = 0; idx < slotsToCreate.length; idx++) {
+      const slotInfo = slotsToCreate[idx];
+      const slotTitle =
+        slotsToCreate.length > 1 && slotInfo.label
+          ? `${baseTitle} (${slotInfo.label})`
+          : baseTitle;
+
+      const localReminder = {
+        id: `local_rem_${Date.now()}_${idx}`,
+        user_id: user?.id || 'local',
+        title: slotTitle,
+        raw_input: rawInput,
+        input_type: inputType,
+        audio_url: audioBase64 || audioFileUri || null,
+        audio_duration: audioDuration || 0,
+        scheduled_at: slotInfo.iso,
+        status: 'pending',
+        priority: priority || aiParsed.priority || 'medium',
+        category: category || aiParsed.category || 'general',
+        snooze_count: 0,
+        repeat_rule: effectiveRepeat,
+        action_link: actionLink !== undefined ? actionLink : (aiParsed.actionLink || ''),
+        location_trigger: locationTrigger !== undefined ? locationTrigger : (aiParsed.locationTrigger || ''),
+        subtasks_json: JSON.stringify(subtasks || []),
+        assigned_to_email: assignedToEmail !== undefined ? assignedToEmail : (aiParsed.assignedToEmail || ''),
+        require_proof: requireProof !== undefined ? (requireProof ? 1 : 0) : (aiParsed.requireProof ? 1 : 0),
+        tts_enabled: ttsEnabled !== undefined ? (ttsEnabled ? 1 : 0) : 1,
+        created_at: nowIso,
+        updated_at: nowIso
+      };
+
+      createdLocal.push(localReminder);
+      currentLogs = await appendLocalLog({
+        reminder: localReminder,
+        action: 'created',
+        details: `Scheduled on-device for ${new Date(localReminder.scheduled_at).toLocaleString()} (${aiParsed.parsedTimeText})`
+      });
+    }
+
+    const nextReminders = [...createdLocal, ...reminders];
+    await saveLocalCache(nextReminders, currentLogs);
+    return {
+      reminder: createdLocal[0],
+      reminders: createdLocal,
+      count: createdLocal.length,
+      parsed: aiParsed
     };
-
-    const nextReminders = [localReminder, ...reminders];
-    const nextLogs = await appendLocalLog({
-      reminder: localReminder,
-      action: 'created',
-      details: `Scheduled on-device for ${new Date(localReminder.scheduled_at).toLocaleString()} (${aiParsed.parsedTimeText})`
-    });
-
-    await saveLocalCache(nextReminders, nextLogs);
-    return { reminder: localReminder, parsed: aiParsed };
   }
 
   async function updateSubtasks(reminderId, subtasks) {

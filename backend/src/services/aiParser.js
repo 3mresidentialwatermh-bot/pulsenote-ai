@@ -230,6 +230,78 @@ function parseExplicitClockTime(text, referenceDate) {
   };
 }
 
+/**
+ * Extracts multiple daily clock times if the user wants the SAME activity multiple times a day:
+ * e.g. "Take medicine at 9:00 AM, 2:00 PM and 8:00 PM"
+ *   or "3 times a day" / "twice a day" / "4 times daily"
+ */
+function parseMultiTimesSchedule(text, referenceDate) {
+  let slots = [];
+  let matchedPhrases = [];
+
+  // 1. Check frequency phrases like "twice a day", "3 times a day", "4 times daily"
+  const freqMatch = text.match(/\b(twice|two\s+times|three\s+times|four\s+times|(\d)\s*times)\s+(?:a\s+day|per\s+day|daily|in\s+a\s+day)\b/i);
+  if (freqMatch) {
+    matchedPhrases.push(freqMatch[0]);
+    const rawWord = freqMatch[1].toLowerCase();
+    let count = parseInt(freqMatch[2] || '0', 10);
+    if (!count) {
+      if (rawWord.startsWith('tw')) count = 2;
+      else if (rawWord.startsWith('th')) count = 3;
+      else if (rawWord.startsWith('fo')) count = 4;
+    }
+    if (count === 2) slots = ['09:00', '21:00'];
+    else if (count === 3) slots = ['09:00', '14:00', '20:00'];
+    else if (count >= 4) slots = ['08:00', '12:00', '16:00', '20:00'];
+  }
+
+  // 2. Check if the text mentions 2 or more explicit clock times (e.g. "at 8:00 am, 2:30 pm and 9:00 pm" or "at 7:30 and 9:30")
+  const multiClockRegex = /\b(\d{1,2}):([0-5]\d)(?:\s*(am|pm))?|\b(\d{1,2})\s*(am|pm)\b/gi;
+  const clockMatches = [...text.matchAll(multiClockRegex)];
+  if (clockMatches.length >= 2) {
+    const explicitSlots = [];
+    for (const cm of clockMatches) {
+      matchedPhrases.push(cm[0]);
+      let h = parseInt(cm[1] || cm[4], 10);
+      const mins = parseInt(cm[2] || '0', 10);
+      const mer = (cm[3] || cm[5] || '').toLowerCase();
+      if (mer === 'pm' && h < 12) h += 12;
+      if (mer === 'am' && h === 12) h = 0;
+      if (h >= 0 && h <= 23) {
+        const hh = String(h).padStart(2, '0');
+        const mm = String(mins).padStart(2, '0');
+        if (!explicitSlots.includes(`${hh}:${mm}`)) {
+          explicitSlots.push(`${hh}:${mm}`);
+        }
+      }
+    }
+    if (explicitSlots.length >= 2) {
+      slots = explicitSlots;
+    }
+  }
+
+  if (slots.length < 2) return null;
+
+  // Convert slots into upcoming Date objects (sorted soonest first)
+  const scheduledDates = slots
+    .map((slot) => {
+      const [h, m] = slot.split(':').map(Number);
+      const d = new Date(referenceDate);
+      d.setHours(h, m, 0, 0);
+      if (d.getTime() <= referenceDate.getTime()) {
+        d.setDate(d.getDate() + 1);
+      }
+      return { slot, date: d, iso: d.toISOString() };
+    })
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  return {
+    slots,
+    scheduledDates,
+    matchedPhrases
+  };
+}
+
 function parseReminderInput(rawText, referenceDate = new Date()) {
   const input = normalizeSpokenNumbers((rawText || '').trim());
   if (!input) {
@@ -308,14 +380,25 @@ function parseReminderInput(rawText, referenceDate = new Date()) {
     ? input.replace(matchedRepeatPhrase, ' ')
     : input;
 
+  const multiSchedule = parseMultiTimesSchedule(inputWithoutRepeat, referenceDate);
   const explicitClock = parseExplicitClockTime(inputWithoutRepeat, referenceDate);
   const results = chrono.parse(inputWithoutRepeat, referenceDate, { forwardDate: true });
 
   let scheduledDate = null;
   let parsedTimeText = '';
   let cleanedTitle = inputWithoutRepeat;
+  let multiTimes = [];
 
-  if (explicitClock && (!results.length || !/\b(am|pm|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(results[0].text))) {
+  if (multiSchedule) {
+    scheduledDate = multiSchedule.scheduledDates[0].date;
+    multiTimes = multiSchedule.slots;
+    repeatRule = 'daily';
+    parsedTimeText = `${multiSchedule.slots.length}x Daily (${multiSchedule.slots.join(', ')})`;
+    for (const phrase of multiSchedule.matchedPhrases) {
+      cleanedTitle = cleanedTitle.replace(phrase, ' ');
+    }
+    cleanedTitle = cleanedTitle.replace(/\b(at|and|on|by)\b/gi, ' ').trim();
+  } else if (explicitClock && (!results.length || !/\b(am|pm|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(results[0].text))) {
     scheduledDate = explicitClock.date;
     parsedTimeText = explicitClock.matchedText;
     cleanedTitle = inputWithoutRepeat.replace(explicitClock.matchedText, ' ').trim();
@@ -372,10 +455,11 @@ function parseReminderInput(rawText, referenceDate = new Date()) {
   return {
     title: cleanedTitle,
     scheduledAt: scheduledDate.toISOString(),
+    multiTimes,
     priority,
     category,
     repeatRule,
-    repeatLabel: repeatMeta.label,
+    repeatLabel: multiTimes.length > 1 ? `${multiTimes.length}x Daily (${multiTimes.join(', ')})` : repeatMeta.label,
     actionLink,
     locationTrigger,
     assignedToEmail,

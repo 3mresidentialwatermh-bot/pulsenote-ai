@@ -129,6 +129,70 @@ function parseExplicitClockTime(text, referenceDate) {
   }
 }
 
+function parseMultiTimesSchedule(text, referenceDate) {
+  let slots = [];
+  let matchedPhrases = [];
+
+  const freqMatch = text.match(/\b(twice|two\s+times|three\s+times|four\s+times|(\d)\s*times)\s+(?:a\s+day|per\s+day|daily|in\s+a\s+day)\b/i);
+  if (freqMatch) {
+    matchedPhrases.push(freqMatch[0]);
+    const rawWord = freqMatch[1].toLowerCase();
+    let count = parseInt(freqMatch[2] || '0', 10);
+    if (!count) {
+      if (rawWord.startsWith('tw')) count = 2;
+      else if (rawWord.startsWith('th')) count = 3;
+      else if (rawWord.startsWith('fo')) count = 4;
+    }
+    if (count === 2) slots = ['09:00', '21:00'];
+    else if (count === 3) slots = ['09:00', '14:00', '20:00'];
+    else if (count >= 4) slots = ['08:00', '12:00', '16:00', '20:00'];
+  }
+
+  const multiClockRegex = /\b(\d{1,2}):([0-5]\d)(?:\s*(am|pm))?|\b(\d{1,2})\s*(am|pm)\b/gi;
+  const clockMatches = [...text.matchAll(multiClockRegex)];
+  if (clockMatches.length >= 2) {
+    const explicitSlots = [];
+    for (const cm of clockMatches) {
+      matchedPhrases.push(cm[0]);
+      let h = parseInt(cm[1] || cm[4], 10);
+      const mins = parseInt(cm[2] || '0', 10);
+      const mer = (cm[3] || cm[5] || '').toLowerCase();
+      if (mer === 'pm' && h < 12) h += 12;
+      if (mer === 'am' && h === 12) h = 0;
+      if (h >= 0 && h <= 23) {
+        const hh = String(h).padStart(2, '0');
+        const mm = String(mins).padStart(2, '0');
+        if (!explicitSlots.includes(`${hh}:${mm}`)) {
+          explicitSlots.push(`${hh}:${mm}`);
+        }
+      }
+    }
+    if (explicitSlots.length >= 2) {
+      slots = explicitSlots;
+    }
+  }
+
+  if (slots.length < 2) return null;
+
+  const scheduledDates = slots
+    .map((slot) => {
+      const [h, m] = slot.split(':').map(Number);
+      const d = new Date(referenceDate);
+      d.setHours(h, m, 0, 0);
+      if (d.getTime() <= referenceDate.getTime()) {
+        d.setDate(d.getDate() + 1);
+      }
+      return { slot, date: d, iso: d.toISOString() };
+    })
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  return {
+    slots,
+    scheduledDates,
+    matchedPhrases
+  };
+}
+
 export function parseReminderLocally(rawText, referenceDate = new Date()) {
   const input = normalizeSpokenNumbers((rawText || '').trim());
   if (!input) {
@@ -234,16 +298,29 @@ export function parseReminderLocally(rawText, referenceDate = new Date()) {
   let scheduledDate = null;
   let parsedTimeText = '';
   let cleanedTitle = inputWithoutRepeat;
+  let multiTimes = [];
 
-  // 1. Check relative "in X sec/min/hours" or "after X minutes" or "X hours after"
+  // 1. Check multi-time schedule ("3 times a day", "at 9 AM, 2 PM and 8 PM")
+  const multiSchedule = parseMultiTimesSchedule(inputWithoutRepeat, referenceDate);
+
+  // 2. Check relative "in X sec/min/hours" or "after X minutes" or "X hours after"
   const relMatch = inputWithoutRepeat.match(
     /\b(?:in|after|for)\s+(\d+)\s*(s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours|d|day|days)\b/i
   );
 
-  // 2. Check explicit clock time like "tomorrow at 10:30 AM", "at 5 PM", "by 7.30", "at 7:30"
+  // 3. Check explicit clock time like "tomorrow at 10:30 AM", "at 5 PM", "by 7.30", "at 7:30"
   const explicitClock = parseExplicitClockTime(inputWithoutRepeat, referenceDate);
 
-  if (relMatch) {
+  if (multiSchedule) {
+    scheduledDate = multiSchedule.scheduledDates[0].date;
+    multiTimes = multiSchedule.slots;
+    repeatRule = 'daily';
+    parsedTimeText = `${multiSchedule.slots.length}x Daily (${multiSchedule.slots.join(', ')})`;
+    for (const phrase of multiSchedule.matchedPhrases) {
+      cleanedTitle = cleanedTitle.replace(phrase, ' ');
+    }
+    cleanedTitle = cleanedTitle.replace(/\b(at|and|on|by)\b/gi, ' ').trim();
+  } else if (relMatch) {
     const count = parseInt(relMatch[1], 10);
     const unit = normalizeUnit(relMatch[2]);
     const meta = getLocalRepeatRuleMeta(`every_${count}_${unit}`);
@@ -282,10 +359,11 @@ export function parseReminderLocally(rawText, referenceDate = new Date()) {
   return {
     title: cleanedTitle,
     scheduledAt: scheduledDate.toISOString(),
+    multiTimes,
     priority,
     category,
     repeatRule,
-    repeatLabel: repeatMeta.label,
+    repeatLabel: multiTimes.length > 1 ? `${multiTimes.length}x Daily (${multiTimes.join(', ')})` : repeatMeta.label,
     actionLink,
     locationTrigger,
     assignedToEmail,

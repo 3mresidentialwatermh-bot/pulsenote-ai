@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulsenote-offline-v6';
+const CACHE_NAME = 'pulsenote-offline-v7';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const PRECACHE_URLS = [
   '/icon-512.png',
   '/icon.png',
   '/favicon.ico',
-  '/_expo/static/js/web/index-012a57ba2733f980fec606e104502c30.js'
+  '/_expo/static/js/web/index-bc46a9bd09358ace06d5e1a18bed65a3.js'
 ];
 
 self.addEventListener('install', (event) => {

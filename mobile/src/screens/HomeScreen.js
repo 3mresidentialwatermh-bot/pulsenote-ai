@@ -17,10 +17,17 @@ import { useReminders } from '../context/ReminderContext';
 import { playVoiceNoteUrl, stopVoiceNotePlayback } from '../utils/sound';
 
 const QUICK_PRESETS = [
+  'Take medicine 3 times a day at 9:00 AM, 2:00 PM and 8:00 PM',
   'Remind me to drink water every 3 hours',
   'Urgent: Join Zoom standup https://meet.google.com/new in 20 seconds',
-  'Call client +18005550199 about SaaS invoice in 30 seconds',
   'Buy milk when I reach Supermarket in 1 minute'
+];
+
+const MULTI_TIME_PRESETS = [
+  { key: 'none', label: 'Single Time', slots: [] },
+  { key: '2x', label: '2x Daily (9 AM, 9 PM)', slots: ['09:00', '21:00'] },
+  { key: '3x', label: '3x Daily (9 AM, 2 PM, 8 PM)', slots: ['09:00', '14:00', '20:00'] },
+  { key: '4x', label: '4x Daily (8 AM, 12 PM, 4 PM, 8 PM)', slots: ['08:00', '12:00', '16:00', '20:00'] }
 ];
 
 const REPEAT_OPTIONS = [
@@ -84,6 +91,8 @@ export default function HomeScreen({ onNavigateTab }) {
   const [inputMode, setInputMode] = useState('text'); // 'text' | 'voice'
   const [rawText, setRawText] = useState('');
   const [selectedRepeat, setSelectedRepeat] = useState('auto');
+  const [multiTimeSlots, setMultiTimeSlots] = useState([]);
+  const [customSlotInput, setCustomSlotInput] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('auto');
   const [activeCategoryFilter, setActiveCategoryFilter] = useState('all');
 
@@ -427,6 +436,7 @@ export default function HomeScreen({ onNavigateTab }) {
 
       const result = await createReminder({
         rawInput: textToParse,
+        multiTimes: multiTimeSlots.length > 0 ? multiTimeSlots : undefined,
         repeatRule: selectedRepeat === 'auto' ? undefined : selectedRepeat,
         category: selectedCategory === 'auto' ? undefined : selectedCategory,
         actionLink: actionLink.trim() || undefined,
@@ -444,6 +454,8 @@ export default function HomeScreen({ onNavigateTab }) {
 
       setRawText('');
       setSelectedRepeat('auto');
+      setMultiTimeSlots([]);
+      setCustomSlotInput('');
       setSelectedCategory('auto');
       setActionLink('');
       setLocationTrigger('');
@@ -455,9 +467,11 @@ export default function HomeScreen({ onNavigateTab }) {
       setRecordedFileUri(null);
       setRecordingSeconds(0);
       setBannerSuccess(
-        `Scheduled "${result.reminder.title}" for ${new Date(
-          result.reminder.scheduled_at
-        ).toLocaleTimeString()}${result.quietHoursAdjusted ? ' (Adjusted for Quiet Hours)' : ''}`
+        result.count > 1
+          ? `Scheduled "${result.reminder.title}" across ${result.count} daily time slots!`
+          : `Scheduled "${result.reminder.title}" for ${new Date(
+              result.reminder.scheduled_at
+            ).toLocaleTimeString()}${result.quietHoursAdjusted ? ' (Adjusted for Quiet Hours)' : ''}`
       );
     } catch (err) {
       setBannerError(err.message || 'Could not create reminder.');
@@ -730,6 +744,91 @@ export default function HomeScreen({ onNavigateTab }) {
           </ScrollView>
         </View>
 
+        {/* Multi-Time Daily Activity Scheduler (Same activity at multiple specific times) */}
+        <View style={styles.presetsSection}>
+          <Text style={styles.presetsLabel}>
+            Multi-Time Daily Scheduler (Do the same activity multiple times a day):
+          </Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.presetsRow}>
+              {MULTI_TIME_PRESETS.map((mp) => {
+                const isSelected =
+                  mp.slots.length === multiTimeSlots.length &&
+                  mp.slots.every((s, i) => multiTimeSlots[i] === s);
+                return (
+                  <TouchableOpacity
+                    key={mp.key}
+                    style={[
+                      styles.presetChip,
+                      isSelected && styles.repeatChipActive
+                    ]}
+                    onPress={() => setMultiTimeSlots([...mp.slots])}
+                  >
+                    <Ionicons
+                      name="time"
+                      size={13}
+                      color={isSelected ? '#FFFFFF' : '#F472B6'}
+                    />
+                    <Text
+                      style={[
+                        styles.presetChipText,
+                        isSelected && { color: '#FFFFFF', fontWeight: '700' }
+                      ]}
+                    >
+                      {mp.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+
+          {/* Custom Time Slot Builder */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+            <TextInput
+              style={[styles.advInput, { width: 135, paddingVertical: 6 }]}
+              placeholder="Add time (e.g. 07:30)"
+              placeholderTextColor="#64748B"
+              value={customSlotInput}
+              onChangeText={setCustomSlotInput}
+            />
+            <TouchableOpacity
+              style={[styles.presetChip, { backgroundColor: '#312E81', borderColor: '#6366F1' }]}
+              onPress={() => {
+                const cleaned = customSlotInput.trim().replace('.', ':');
+                if (/^\d{1,2}:\d{2}(\s*(am|pm))?$/i.test(cleaned)) {
+                  if (!multiTimeSlots.includes(cleaned)) {
+                    setMultiTimeSlots([...multiTimeSlots, cleaned]);
+                  }
+                  setCustomSlotInput('');
+                } else {
+                  setBannerError('Enter time as HH:MM (e.g. 07:30 or 14:30)');
+                }
+              }}
+            >
+              <Ionicons name="add-circle" size={14} color="#A5B4FC" />
+              <Text style={[styles.presetChipText, { color: '#FFFFFF', fontWeight: '700' }]}>
+                + Add Time Slot
+              </Text>
+            </TouchableOpacity>
+
+            {multiTimeSlots.map((slot, idx) => (
+              <TouchableOpacity
+                key={idx}
+                style={[styles.presetChip, { backgroundColor: 'rgba(244,114,182,0.18)', borderColor: '#F472B6' }]}
+                onPress={() =>
+                  setMultiTimeSlots(multiTimeSlots.filter((_, i) => i !== idx))
+                }
+              >
+                <Ionicons name="alarm" size={12} color="#F472B6" />
+                <Text style={[styles.presetChipText, { color: '#F472B6', fontWeight: '700' }]}>
+                  {slot} ✕
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
         {/* Advanced Smart Options Toggle */}
         <TouchableOpacity
           style={styles.advancedToggleBtn}
@@ -883,6 +982,14 @@ export default function HomeScreen({ onNavigateTab }) {
                       {selectedRepeat !== 'auto'
                         ? formatRepeatRule(selectedRepeat)
                         : aiPreview.repeatLabel || formatRepeatRule(aiPreview.repeatRule)}
+                    </Text>
+                  </View>
+                )}
+                {(multiTimeSlots.length > 0 || (aiPreview.multiTimes && aiPreview.multiTimes.length > 1)) && (
+                  <View style={[styles.metaTag, { backgroundColor: 'rgba(244,114,182,0.22)' }]}>
+                    <Text style={[styles.metaTagText, { color: '#F472B6' }]}>
+                      ⏰ Multi-Times:{' '}
+                      {(multiTimeSlots.length > 0 ? multiTimeSlots : aiPreview.multiTimes).join(', ')}
                     </Text>
                   </View>
                 )}
