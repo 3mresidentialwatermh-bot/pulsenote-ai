@@ -241,8 +241,8 @@ export function ReminderProvider({ children }) {
     }
   }
 
-  async function previewNaturalLanguage(text) {
-    if (!text.trim()) return null;
+  async function previewNaturalLanguage(text, audioBase64 = null, audioMimeType = 'audio/webm') {
+    if (!text.trim() && !audioBase64) return null;
     try {
       if (token && !token.startsWith('offline-token')) {
         const data = await apiRequest('/api/reminders/parse', {
@@ -250,6 +250,8 @@ export function ReminderProvider({ children }) {
           token,
           body: {
             text,
+            audioBase64,
+            audioMimeType,
             referenceTime: new Date().toISOString()
           }
         });

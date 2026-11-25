@@ -28,6 +28,7 @@ export default function SubscriptionScreen() {
   const [escSms, setEscSms] = useState(!!user?.escalation_sms);
   const [escEmail, setEscEmail] = useState(user?.escalation_email !== 0);
   const [phone, setPhone] = useState(user?.phone_number || '+91 98765 43210');
+  const [geminiKey, setGeminiKey] = useState(user?.gemini_api_key || '');
 
   const currentPlan = user?.plan || 'free';
   const isPaid = currentPlan === 'pro' || currentPlan === 'teams';
@@ -59,7 +60,8 @@ export default function SubscriptionScreen() {
         escalation_whatsapp: escWhatsapp,
         escalation_sms: escSms,
         escalation_email: escEmail,
-        phone_number: phone
+        phone_number: phone,
+        gemini_api_key: geminiKey.trim()
       });
       setStatusMessage(res.message || 'Preferences saved!');
     } catch (err) {
@@ -240,6 +242,25 @@ export default function SubscriptionScreen() {
             placeholder="+1 800 555 0199"
             placeholderTextColor="#64748B"
           />
+        </View>
+
+        <View style={{ marginTop: 12 }}>
+          <Text style={[styles.inputLabel, { color: '#A5B4FC' }]}>
+            ✨ Google Gemini 2.5 Flash API Key (Real Multimodal Voice & Text AI)
+          </Text>
+          <TextInput
+            style={styles.inputBox}
+            value={geminiKey}
+            onChangeText={setGeminiKey}
+            autoCapitalize="none"
+            placeholder="Paste your AIza... key from aistudio.google.com/apikey"
+            placeholderTextColor="#64748B"
+          />
+          <Text style={{ color: '#94A3B8', fontSize: 11, marginTop: 4 }}>
+            {geminiKey.trim()
+              ? '✓ Real Gemini 2.5 Flash AI active for direct voice-note audio & complex text reasoning!'
+              : 'Get a free key at aistudio.google.com/apikey to enable direct Gemini audio transcription & reasoning.'}
+          </Text>
         </View>
 
         <TouchableOpacity

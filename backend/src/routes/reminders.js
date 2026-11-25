@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const { parseReminderInput, getRepeatRuleMeta, applyQuietHours } = require('../services/aiParser');
+const { parseWithGeminiAI } = require('../services/geminiService');
 
 const router = express.Router();
 
@@ -36,12 +37,32 @@ function createLogEntry({ reminderId, userId, reminderTitle, inputType, audioUrl
   `).run(logId, reminderId, userId, reminderTitle, inputType || 'text', audioUrl || null, action, details || '', now);
 }
 
-// Preview AI Natural Language Parse before saving
-router.post('/parse', authenticateToken, (req, res) => {
-  const { text, referenceTime } = req.body;
-  const refDate = referenceTime ? new Date(referenceTime) : new Date();
-  const parsed = parseReminderInput(text || '', refDate);
-  res.json({ parsed });
+// Preview AI Natural Language & Multimodal Voice Parse before saving
+router.post('/parse', authenticateToken, async (req, res) => {
+  try {
+    const { text, audioBase64, audioMimeType, referenceTime } = req.body;
+    const refDate = referenceTime ? new Date(referenceTime) : new Date();
+    const userApiKey = req.user?.gemini_api_key || process.env.GEMINI_API_KEY;
+
+    // Use real Gemini 2.5 Flash LLM whenever audioBase64 is sent or a Gemini API key is configured
+    if (userApiKey || audioBase64) {
+      const parsed = await parseWithGeminiAI({
+        rawText: text || '',
+        audioBase64: audioBase64 || null,
+        audioMimeType: audioMimeType || 'audio/webm',
+        referenceDate: refDate,
+        apiKey: userApiKey
+      });
+      return res.json({ parsed });
+    }
+
+    const parsed = parseReminderInput(text || '', refDate);
+    res.json({ parsed: { ...parsed, aiEngine: 'local-nlp' } });
+  } catch (err) {
+    const refDate = req.body?.referenceTime ? new Date(req.body.referenceTime) : new Date();
+    const parsed = parseReminderInput(req.body?.text || '', refDate);
+    res.json({ parsed: { ...parsed, aiEngine: 'local-nlp' } });
+  }
 });
 
 // Get all reminders for logged-in user (including delegated reminders assigned to their email)
@@ -58,7 +79,7 @@ router.get('/', authenticateToken, (req, res) => {
 });
 
 // Create a reminder (supports both JSON text input and multipart/form-data voice note upload)
-router.post('/', authenticateToken, upload.single('audio'), (req, res) => {
+router.post('/', authenticateToken, upload.single('audio'), async (req, res) => {
   try {
     const user = req.user;
     const isVoice = req.body.inputType === 'voice' || !!req.file || !!req.body.audioBase64;
@@ -83,22 +104,46 @@ router.post('/', authenticateToken, upload.single('audio'), (req, res) => {
     }
 
     let audioUrl = null;
+    let audioBase64ForAI = req.body.audioBase64 || null;
+    let audioMimeTypeForAI = 'audio/webm';
+
     if (req.file) {
       audioUrl = `/uploads/${req.file.filename}`;
+      try {
+        const fileBuf = fs.readFileSync(req.file.path);
+        audioBase64ForAI = fileBuf.toString('base64');
+        audioMimeTypeForAI = req.file.mimetype || 'audio/mp4';
+      } catch (e) {}
     } else if (req.body.audioBase64) {
       const commaIdx = req.body.audioBase64.indexOf(',');
       const base64Data = commaIdx !== -1 ? req.body.audioBase64.slice(commaIdx + 1) : req.body.audioBase64;
       const ext = req.body.audioExt || '.webm';
+      audioMimeTypeForAI = ext === '.m4a' ? 'audio/mp4' : ext === '.wav' ? 'audio/wav' : 'audio/webm';
       const filename = `voice_${Date.now()}_${uuidv4().slice(0, 8)}${ext}`;
       fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(base64Data, 'base64'));
       audioUrl = `/uploads/${filename}`;
     }
 
-    const rawInput = (req.body.rawInput || req.body.text || req.body.transcript || '').trim() ||
-      (isVoice ? 'Voice Note Reminder' : 'Untitled Reminder');
-
+    let rawInput = (req.body.rawInput || req.body.text || req.body.transcript || '').trim();
     const refDate = req.body.referenceTime ? new Date(req.body.referenceTime) : new Date();
-    const aiParsed = parseReminderInput(rawInput, refDate);
+    const userApiKey = user.gemini_api_key || process.env.GEMINI_API_KEY;
+
+    // Run real Gemini 2.5 Flash AI when an API key is configured (including direct audio understanding!)
+    const aiParsed = userApiKey
+      ? await parseWithGeminiAI({
+          rawText: rawInput,
+          audioBase64: isVoice ? audioBase64ForAI : null,
+          audioMimeType: audioMimeTypeForAI,
+          referenceDate: refDate,
+          apiKey: userApiKey
+        })
+      : parseReminderInput(rawInput || (isVoice ? 'Voice Note Reminder' : 'Untitled Reminder'), refDate);
+
+    if (!rawInput && aiParsed.transcript) {
+      rawInput = aiParsed.transcript;
+    } else if (!rawInput) {
+      rawInput = isVoice ? 'Voice Note Reminder' : 'Untitled Reminder';
+    }
 
     const title = (req.body.title || '').trim() || aiParsed.title;
     let scheduledAt = req.body.scheduledAt || aiParsed.scheduledAt;

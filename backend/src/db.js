@@ -92,6 +92,7 @@ safeAddColumn('users', "escalation_sms INTEGER NOT NULL DEFAULT 0");
 safeAddColumn('users', "escalation_email INTEGER NOT NULL DEFAULT 1");
 safeAddColumn('users', "phone_number TEXT DEFAULT ''");
 safeAddColumn('users', "streak_days INTEGER NOT NULL DEFAULT 1");
+safeAddColumn('users', "gemini_api_key TEXT DEFAULT ''");
 
 safeAddColumn('reminders', "category TEXT NOT NULL DEFAULT 'general'");
 safeAddColumn('reminders', "action_link TEXT DEFAULT ''");

@@ -333,8 +333,25 @@ export default function HomeScreen({ onNavigateTab }) {
         pendingAudioPromiseRef.current = null;
       }
 
-      await audioPromise;
-      // Do NOT overwrite rawText with a fake hardcoded phrase! Keep the user's real spoken transcript or let them type/dictate in the box below.
+      const finalBase64 = await audioPromise;
+      // Immediately send the recorded voice note audio to Gemini 2.5 Flash AI for multimodal voice transcription & extraction!
+      if (finalBase64) {
+        try {
+          const mime = recordedAudioExt === '.m4a' ? 'audio/mp4' : 'audio/webm';
+          const geminiParsed = await previewNaturalLanguage(
+            latestTranscriptRef.current || rawText || '',
+            finalBase64,
+            mime
+          );
+          if (geminiParsed) {
+            setAiPreview(geminiParsed);
+            if (geminiParsed.transcript && !rawText.trim()) {
+              latestTranscriptRef.current = geminiParsed.transcript;
+              setRawText(geminiParsed.transcript);
+            }
+          }
+        } catch (e) {}
+      }
       return;
     }
 
@@ -410,11 +427,12 @@ export default function HomeScreen({ onNavigateTab }) {
     }
 
     const textToParse = (rawText.trim() || latestTranscriptRef.current.trim());
+    const hasRecordedVoice = inputMode === 'voice' && !!(latestBase64 || recordedAudioBase64 || recordedFileUri);
 
-    if (!textToParse) {
+    if (!textToParse && !hasRecordedVoice) {
       setBannerError(
         inputMode === 'voice'
-          ? 'Please speak or type your task in the transcript box below (or tap "AI Voice Dictate" / your keyboard mic) so the AI knows when to set the alarm!'
+          ? 'Please record a voice note or speak/type your task in the transcript box below!'
           : 'Please enter a reminder message.'
       );
       return;
@@ -941,7 +959,9 @@ export default function HomeScreen({ onNavigateTab }) {
             <View style={styles.aiPreviewHeader}>
               <Ionicons name="sparkles" size={15} color="#A5B4FC" />
               <Text style={styles.aiPreviewHeaderText}>
-                AI NATURAL LANGUAGE & ENTITY EXTRACTION
+                {aiPreview.aiEngine && aiPreview.aiEngine.startsWith('gemini')
+                  ? `GOOGLE GEMINI 2.5 FLASH AI EXTRACTION`
+                  : `AI NATURAL LANGUAGE & ENTITY EXTRACTION`}
               </Text>
             </View>
             <View style={styles.aiPreviewGrid}>
