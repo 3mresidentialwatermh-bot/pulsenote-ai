@@ -93,6 +93,7 @@ safeAddColumn('users', "escalation_email INTEGER NOT NULL DEFAULT 1");
 safeAddColumn('users', "phone_number TEXT DEFAULT ''");
 safeAddColumn('users', "streak_days INTEGER NOT NULL DEFAULT 1");
 safeAddColumn('users', "gemini_api_key TEXT DEFAULT ''");
+safeAddColumn('users', "alarm_tone TEXT NOT NULL DEFAULT 'classic'");
 
 safeAddColumn('reminders', "category TEXT NOT NULL DEFAULT 'general'");
 safeAddColumn('reminders', "action_link TEXT DEFAULT ''");
@@ -102,6 +103,8 @@ safeAddColumn('reminders', "assigned_to_email TEXT DEFAULT ''");
 safeAddColumn('reminders', "require_proof INTEGER NOT NULL DEFAULT 0");
 safeAddColumn('reminders', "tts_enabled INTEGER NOT NULL DEFAULT 1");
 safeAddColumn('reminders', "push_sent_at TEXT DEFAULT ''");
+safeAddColumn('reminders', "alarm_tone TEXT NOT NULL DEFAULT 'classic'");
+safeAddColumn('reminders', "image_url TEXT DEFAULT ''");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS push_subscriptions (

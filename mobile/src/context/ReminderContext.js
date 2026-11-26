@@ -209,6 +209,18 @@ export function ReminderProvider({ children }) {
             });
           }
 
+          // Listen for Lock-Screen Notification Action Clicks ('complete' or 'snooze_10') from Service Worker
+          navigator.serviceWorker.addEventListener('message', (event) => {
+            const msg = event.data;
+            if (msg && msg.type === 'NOTIFICATION_ACTION' && msg.reminderId) {
+              if (msg.action === 'complete') {
+                handleReminderAction(msg.reminderId, 'complete');
+              } else if (msg.action === 'snooze_10') {
+                handleReminderAction(msg.reminderId, 'snooze', 10);
+              }
+            }
+          });
+
           await apiRequest('/api/auth/push-subscribe', {
             method: 'POST',
             token,
@@ -274,7 +286,7 @@ export function ReminderProvider({ children }) {
 
   async function triggerAlarmNow(reminder) {
     setActiveAlarm(reminder);
-    startAlarmRinging(reminder, user?.name || '');
+    startAlarmRinging(reminder, user?.name || '', user?.alarm_tone || 'classic');
 
     // Fire an OS-level Android/iOS/Desktop Notification via the Service Worker so it pops up over the status bar!
     if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
@@ -288,7 +300,12 @@ export function ReminderProvider({ children }) {
               badge: '/icon-192.png',
               vibrate: [500, 300, 500, 300, 500],
               requireInteraction: true,
-              tag: `alarm_${reminder.id}`
+              tag: `alarm_${reminder.id}`,
+              data: { reminderId: reminder.id },
+              actions: [
+                { action: 'complete', title: '✅ Mark Done' },
+                { action: 'snooze_10', title: '💤 Snooze 10m' }
+              ]
             });
           } else {
             new window.Notification(`⏰ PulseNote Alarm: ${reminder.title}`, {
@@ -319,8 +336,14 @@ export function ReminderProvider({ children }) {
     }
   }
 
-  async function previewNaturalLanguage(text, audioBase64 = null, audioMimeType = 'audio/webm') {
-    if (!text.trim() && !audioBase64) return null;
+  async function previewNaturalLanguage(
+    text,
+    audioBase64 = null,
+    audioMimeType = 'audio/webm',
+    imageBase64 = null,
+    imageMimeType = 'image/jpeg'
+  ) {
+    if (!text.trim() && !audioBase64 && !imageBase64) return null;
     try {
       if (token && !token.startsWith('offline-token')) {
         const data = await apiRequest('/api/reminders/parse', {
@@ -330,6 +353,8 @@ export function ReminderProvider({ children }) {
             text,
             audioBase64,
             audioMimeType,
+            imageBase64,
+            imageMimeType,
             referenceTime: new Date().toISOString()
           }
         });
@@ -341,6 +366,95 @@ export function ReminderProvider({ children }) {
     return parseReminderLocally(text, new Date());
   }
 
+  async function fetchDailyBriefing() {
+    try {
+      if (token && !token.startsWith('offline-token')) {
+        return await apiRequest('/api/reminders/briefing', { token });
+      }
+    } catch (e) {}
+    const pending = reminders.filter((r) => r.status === 'pending' || r.status === 'snoozed');
+    const firstName = (user?.name || 'there').split(' ')[0];
+    return {
+      briefing:
+        pending.length === 0
+          ? `Hey ${firstName}! Your schedule is clear with 0 pending alarms on a ${user?.streak_days || 1}-day streak.`
+          : `Hey ${firstName}! You have ${pending.length} active reminder(s). Up next is "${pending[0].title}" at ${new Date(pending[0].scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
+      aiEngine: 'local'
+    };
+  }
+
+  async function runAssistantCommand(command) {
+    if (!command || !command.trim()) return null;
+    try {
+      if (token && !token.startsWith('offline-token')) {
+        const res = await apiRequest('/api/reminders/assistant', {
+          method: 'POST',
+          token,
+          body: { command, referenceTime: new Date().toISOString() }
+        });
+        await Promise.all([fetchReminders(), fetchLogs()]);
+        return res;
+      }
+    } catch (e) {}
+    // Local offline assistant fallback
+    const pending = reminders.filter((r) => r.status === 'pending' || r.status === 'snoozed');
+    const shiftMatch = command.match(/\b(?:push|shift|delay|move|snooze)\b.*?\b(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours)\b/i);
+    if (shiftMatch) {
+      const count = parseInt(shiftMatch[1], 10);
+      const isHours = shiftMatch[2].toLowerCase().startsWith('h');
+      const offsetMs = count * (isHours ? 3600000 : 60000);
+      const nextReminders = reminders.map((r) =>
+        r.status === 'pending' || r.status === 'snoozed'
+          ? { ...r, scheduled_at: new Date(new Date(r.scheduled_at).getTime() + offsetMs).toISOString() }
+          : r
+      );
+      await saveLocalCache(nextReminders, logs);
+      return {
+        reply: `Shifted ${pending.length} active reminder(s) forward by ${count} ${isHours ? 'hour(s)' : 'minute(s)'}.`,
+        operationsCount: pending.length
+      };
+    }
+    return {
+      reply: `You have ${pending.length} active reminder(s). Try "Push all alarms back by 30 minutes".`,
+      operationsCount: 0
+    };
+  }
+
+  async function editReminder(reminderId, updates) {
+    try {
+      if (token && !token.startsWith('offline-token')) {
+        const res = await apiRequest(`/api/reminders/${reminderId}`, {
+          method: 'PATCH',
+          token,
+          body: updates
+        });
+        await Promise.all([fetchReminders(), fetchLogs()]);
+        return res.reminder;
+      }
+    } catch (e) {}
+
+    // Offline edit fallback
+    const nextReminders = reminders.map((r) => {
+      if (r.id !== reminderId) return r;
+      let nextSched = updates.scheduledAt || r.scheduled_at;
+      if (updates.shiftMinutes) {
+        const base = Math.max(Date.now(), new Date(r.scheduled_at).getTime());
+        nextSched = new Date(base + Number(updates.shiftMinutes) * 60000).toISOString();
+      }
+      return {
+        ...r,
+        title: updates.title || r.title,
+        scheduled_at: nextSched,
+        repeat_rule: updates.repeatRule !== undefined ? updates.repeatRule : r.repeat_rule,
+        category: updates.category || r.category,
+        alarm_tone: updates.alarmTone || r.alarm_tone || 'classic',
+        status: 'pending'
+      };
+    });
+    await saveLocalCache(nextReminders, logs);
+    return nextReminders.find((r) => r.id === reminderId);
+  }
+
   async function createReminder({
     rawInput,
     title,
@@ -349,6 +463,7 @@ export function ReminderProvider({ children }) {
     priority,
     category,
     repeatRule,
+    alarmTone,
     actionLink,
     locationTrigger,
     assignedToEmail,
@@ -359,7 +474,9 @@ export function ReminderProvider({ children }) {
     audioBase64 = null,
     audioExt = '.wav',
     audioDuration = 0,
-    audioFileUri = null
+    audioFileUri = null,
+    imageBase64 = null,
+    imageMimeType = 'image/jpeg'
   }) {
     try {
       if (token && !token.startsWith('offline-token')) {
@@ -375,6 +492,7 @@ export function ReminderProvider({ children }) {
           if (priority) formData.append('priority', priority);
           if (category) formData.append('category', category);
           if (repeatRule) formData.append('repeatRule', repeatRule);
+          if (alarmTone) formData.append('alarmTone', alarmTone);
           if (actionLink) formData.append('actionLink', actionLink);
           if (locationTrigger) formData.append('locationTrigger', locationTrigger);
           if (assignedToEmail) formData.append('assignedToEmail', assignedToEmail);
@@ -403,6 +521,7 @@ export function ReminderProvider({ children }) {
             priority,
             category,
             repeatRule,
+            alarmTone,
             actionLink,
             locationTrigger,
             assignedToEmail,
@@ -413,6 +532,8 @@ export function ReminderProvider({ children }) {
             audioBase64,
             audioExt,
             audioDuration,
+            imageBase64,
+            imageMimeType,
             referenceTime: new Date().toISOString()
           };
         }
@@ -681,6 +802,9 @@ export function ReminderProvider({ children }) {
         fetchReminders,
         fetchLogs,
         previewNaturalLanguage,
+        fetchDailyBriefing,
+        runAssistantCommand,
+        editReminder,
         createReminder,
         updateSubtasks,
         handleReminderAction,

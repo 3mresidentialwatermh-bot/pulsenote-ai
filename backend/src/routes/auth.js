@@ -12,7 +12,7 @@ const USER_SELECT_FIELDS = `
   id, name, email, plan, voice_quota_used, voice_quota_limit, reminder_limit,
   quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
   escalation_whatsapp, escalation_sms, escalation_email, phone_number,
-  streak_days, gemini_api_key, created_at
+  streak_days, gemini_api_key, alarm_tone, created_at
 `;
 
 // Register new user
@@ -102,7 +102,8 @@ router.patch('/preferences', authenticateToken, (req, res) => {
       escalation_sms,
       escalation_email,
       phone_number,
-      gemini_api_key
+      gemini_api_key,
+      alarm_tone
     } = req.body;
 
     const current = req.user;
@@ -118,7 +119,8 @@ router.patch('/preferences', authenticateToken, (req, res) => {
           escalation_sms = ?,
           escalation_email = ?,
           phone_number = ?,
-          gemini_api_key = ?
+          gemini_api_key = ?,
+          alarm_tone = ?
       WHERE id = ?
     `).run(
       quiet_hours_enabled !== undefined ? (quiet_hours_enabled ? 1 : 0) : current.quiet_hours_enabled,
@@ -129,6 +131,7 @@ router.patch('/preferences', authenticateToken, (req, res) => {
       escalation_email !== undefined ? (escalation_email ? 1 : 0) : current.escalation_email,
       phone_number !== undefined ? phone_number : (current.phone_number || ''),
       gemini_api_key !== undefined ? gemini_api_key.trim() : (current.gemini_api_key || ''),
+      alarm_tone || current.alarm_tone || 'classic',
       current.id
     );
 

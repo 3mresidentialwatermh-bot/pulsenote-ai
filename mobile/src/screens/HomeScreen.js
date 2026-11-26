@@ -14,13 +14,92 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { useAuth } from '../context/AuthContext';
 import { useReminders } from '../context/ReminderContext';
-import { playVoiceNoteUrl, stopVoiceNotePlayback } from '../utils/sound';
+import {
+  playVoiceNoteUrl,
+  stopVoiceNotePlayback,
+  speakTextAloud,
+  previewAlarmTone
+} from '../utils/sound';
 
 const QUICK_PRESETS = [
   'Take medicine 3 times a day at 9:00 AM, 2:00 PM and 8:00 PM',
   'Remind me to drink water every 3 hours',
   'Urgent: Join Zoom standup https://meet.google.com/new in 20 seconds',
   'Buy milk when I reach Supermarket in 1 minute'
+];
+
+const ALARM_TONE_OPTIONS = [
+  { key: 'classic', label: 'Classic Pulse', icon: 'notifications' },
+  { key: 'gentle', label: 'Gentle Chime', icon: 'musical-notes' },
+  { key: 'siren', label: 'Emergency Siren', icon: 'alert-circle' },
+  { key: 'voice_loop', label: 'Loop My Voice Note', icon: 'mic' }
+];
+
+const ROUTINE_PACKS = [
+  {
+    key: 'hydration',
+    name: '💧 Hydration Pack',
+    desc: 'Drink water every 2 hours (9 AM, 11 AM, 1 PM, 3 PM, 5 PM, 7 PM)',
+    color: '#38BDF8',
+    payload: {
+      rawInput: 'Drink 250ml water (Hydration Routine Pack)',
+      title: 'Drink 250ml Water',
+      category: 'health',
+      multiTimes: ['09:00', '11:00', '13:00', '15:00', '17:00', '19:00'],
+      repeatRule: 'daily',
+      subtasks: [{ text: 'Drink full glass of water', done: false }]
+    }
+  },
+  {
+    key: 'medication',
+    name: '💊 Medication 3x Pack',
+    desc: 'Morning (9 AM), Afternoon (2 PM) & Night (8 PM) doses',
+    color: '#34D399',
+    payload: {
+      rawInput: 'Take daily medication & vitamins 3 times a day',
+      title: 'Take Medication & Vitamins',
+      category: 'health',
+      multiTimes: ['09:00', '14:00', '20:00'],
+      repeatRule: 'daily',
+      subtasks: [
+        { text: 'Take prescribed dose after meal', done: false },
+        { text: 'Log dose in health diary', done: false }
+      ]
+    }
+  },
+  {
+    key: 'pomodoro',
+    name: '🧘 Desk Stretch & Eye Rest',
+    desc: 'Repeats every 45 minutes to prevent screen fatigue',
+    color: '#F472B6',
+    payload: {
+      rawInput: 'Stretch posture and look 20ft away every 45 minutes',
+      title: 'Desk Stretch & 20-20-20 Eye Break',
+      category: 'health',
+      repeatRule: 'every_45_minutes',
+      subtasks: [
+        { text: 'Look 20 feet away for 20 seconds', done: false },
+        { text: 'Stand up and roll shoulders', done: false }
+      ]
+    }
+  },
+  {
+    key: 'founder',
+    name: '📈 Founder Deep Work Pack',
+    desc: 'Morning Standup (9:30 AM), Midday Review (1:30 PM), Wrap-up (6:30 PM)',
+    color: '#A5B4FC',
+    payload: {
+      rawInput: 'Founder Daily Priorities & Metrics Check-in',
+      title: 'Founder Priority & KPI Review',
+      category: 'work',
+      multiTimes: ['09:30', '13:30', '18:30'],
+      repeatRule: 'daily',
+      subtasks: [
+        { text: 'Review top 3 revenue/product tasks', done: false },
+        { text: 'Clear blockers for team', done: false }
+      ]
+    }
+  }
 ];
 
 const MULTI_TIME_PRESETS = [
@@ -122,6 +201,9 @@ export default function HomeScreen({ onNavigateTab }) {
   const {
     reminders,
     previewNaturalLanguage,
+    fetchDailyBriefing,
+    runAssistantCommand,
+    editReminder,
     createReminder,
     updateSubtasks,
     handleReminderAction,
@@ -129,13 +211,32 @@ export default function HomeScreen({ onNavigateTab }) {
     triggerAlarmNow
   } = useReminders();
 
-  const [inputMode, setInputMode] = useState('text'); // 'text' | 'voice'
+  const [inputMode, setInputMode] = useState('text'); // 'text' | 'voice' | 'photo'
   const [rawText, setRawText] = useState('');
   const [selectedRepeat, setSelectedRepeat] = useState('auto');
   const [multiTimeSlots, setMultiTimeSlots] = useState([]);
   const [customSlotInput, setCustomSlotInput] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('auto');
+  const [selectedAlarmTone, setSelectedAlarmTone] = useState('classic');
   const [activeCategoryFilter, setActiveCategoryFilter] = useState('all');
+
+  // AI Daily Briefing & Conversational Assistant state
+  const [briefingText, setBriefingText] = useState('');
+  const [loadingBriefing, setLoadingBriefing] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantInput, setAssistantInput] = useState('');
+  const [assistantReply, setAssistantReply] = useState('');
+  const [assistantBusy, setAssistantBusy] = useState(false);
+
+  // Photo / Vision OCR state
+  const [capturedImageBase64, setCapturedImageBase64] = useState(null);
+  const [capturedImageMime, setCapturedImageMime] = useState('image/jpeg');
+  const [scanningImage, setScanningImage] = useState(false);
+
+  // Inline Edit Drawer state
+  const [editingId, setEditingId] = useState(null);
+  const [editTitleText, setEditTitleText] = useState('');
+  const [editTimeText, setEditTimeText] = useState('');
 
   // Advanced Smart Options drawer
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -454,6 +555,98 @@ export default function HomeScreen({ onNavigateTab }) {
     }
   }
 
+  async function handlePlayDailyBriefing() {
+    setLoadingBriefing(true);
+    try {
+      const res = await fetchDailyBriefing();
+      const text = res?.briefing || 'Your daily schedule is ready.';
+      setBriefingText(text);
+      speakTextAloud(text);
+    } catch (e) {
+      setBannerError('Could not load AI daily briefing.');
+    } finally {
+      setLoadingBriefing(false);
+    }
+  }
+
+  async function handleAskAssistant() {
+    if (!assistantInput.trim()) return;
+    setAssistantBusy(true);
+    setAssistantReply('');
+    try {
+      const res = await runAssistantCommand(assistantInput.trim());
+      setAssistantReply(res?.reply || 'Done!');
+      if (res?.reply) speakTextAloud(res.reply);
+      setAssistantInput('');
+    } catch (e) {
+      setAssistantReply('Could not run assistant command.');
+    } finally {
+      setAssistantBusy(false);
+    }
+  }
+
+  function handleSelectPhotoVision() {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/*';
+    fileInput.onchange = async (ev) => {
+      const file = ev.target?.files?.[0];
+      if (!file) return;
+      setBannerError('');
+      setScanningImage(true);
+      const mime = file.type || 'image/jpeg';
+      setCapturedImageMime(mime);
+
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64 = reader.result;
+        setCapturedImageBase64(base64);
+        try {
+          const parsed = await previewNaturalLanguage(rawText || '', null, null, base64, mime);
+          if (parsed) {
+            setAiPreview(parsed);
+            if (parsed.transcript) {
+              setRawText(parsed.transcript);
+            }
+            if (Array.isArray(parsed.multiTimes) && parsed.multiTimes.length > 1) {
+              setMultiTimeSlots(parsed.multiTimes);
+            }
+            if (Array.isArray(parsed.subtasks) && parsed.subtasks.length > 0) {
+              setSubtasksText(parsed.subtasks.map((s) => s.text || s).join(', '));
+            }
+          }
+        } catch (e) {
+          setBannerError('Could not analyze photo with Gemini Vision.');
+        } finally {
+          setScanningImage(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    };
+    fileInput.click();
+  }
+
+  async function handleActivateRoutinePack(pack) {
+    setBannerError('');
+    setBannerSuccess('');
+    setCreating(true);
+    try {
+      const res = await createReminder({
+        ...pack.payload,
+        alarmTone: selectedAlarmTone,
+        inputType: 'text'
+      });
+      setBannerSuccess(
+        `Activated "${pack.name}" (${res.count || 1} daily alarm slot${(res.count || 1) > 1 ? 's' : ''} scheduled)!`
+      );
+    } catch (err) {
+      setBannerError(err.message || 'Could not activate routine pack.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
   async function handleSaveReminder() {
     setBannerError('');
     setBannerSuccess('');
@@ -469,11 +662,14 @@ export default function HomeScreen({ onNavigateTab }) {
 
     const textToParse = (rawText.trim() || latestTranscriptRef.current.trim());
     const hasRecordedVoice = inputMode === 'voice' && !!(latestBase64 || recordedAudioBase64 || recordedFileUri);
+    const hasPhoto = inputMode === 'photo' && !!capturedImageBase64;
 
-    if (!textToParse && !hasRecordedVoice) {
+    if (!textToParse && !hasRecordedVoice && !hasPhoto) {
       setBannerError(
         inputMode === 'voice'
           ? 'Please record a voice note or speak/type your task in the transcript box below!'
+          : inputMode === 'photo'
+          ? 'Please snap or upload a photo of a prescription, bill, or note!'
           : 'Please enter a reminder message.'
       );
       return;
@@ -488,6 +684,7 @@ export default function HomeScreen({ onNavigateTab }) {
     setCreating(true);
     try {
       const isVoice = inputMode === 'voice';
+      const isPhoto = inputMode === 'photo';
       const audioBase64ToUse =
         isVoice && !recordedFileUri
           ? latestBase64 || recordedAudioBase64 || generateSampleWavDataUri()
@@ -498,17 +695,20 @@ export default function HomeScreen({ onNavigateTab }) {
         multiTimes: multiTimeSlots.length > 0 ? multiTimeSlots : undefined,
         repeatRule: selectedRepeat === 'auto' ? undefined : selectedRepeat,
         category: selectedCategory === 'auto' ? undefined : selectedCategory,
+        alarmTone: selectedAlarmTone,
         actionLink: actionLink.trim() || undefined,
         locationTrigger: locationTrigger.trim() || undefined,
         assignedToEmail: assignedToEmail.trim() || undefined,
         requireProof: requireProof ? true : undefined,
         ttsEnabled,
         subtasks: parsedSubtasks,
-        inputType: isVoice ? 'voice' : 'text',
+        inputType: isVoice ? 'voice' : isPhoto ? 'photo' : 'text',
         audioBase64: audioBase64ToUse,
         audioExt: latestBase64 || recordedAudioBase64 ? recordedAudioExt : '.wav',
         audioDuration: recordingSeconds || 4,
-        audioFileUri: recordedFileUri
+        audioFileUri: recordedFileUri,
+        imageBase64: isPhoto ? capturedImageBase64 : null,
+        imageMimeType: capturedImageMime
       });
 
       setRawText('');
@@ -524,6 +724,7 @@ export default function HomeScreen({ onNavigateTab }) {
       setAiPreview(null);
       setRecordedAudioBase64(null);
       setRecordedFileUri(null);
+      setCapturedImageBase64(null);
       setRecordingSeconds(0);
       setBannerSuccess(
         result.count > 1
@@ -611,7 +812,117 @@ export default function HomeScreen({ onNavigateTab }) {
         )}
       </View>
 
-      {/* Input Composer Card (Text or Voice Note) */}
+      {/* 1. AI Daily Executive Briefing + Conversational AI Assistant Bar */}
+      <View style={styles.composerCard}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Ionicons name="sparkles" size={18} color="#38BDF8" />
+            <Text style={{ color: '#F8FAFC', fontSize: 15, fontWeight: '800' }}>
+              Gemini 2.5 AI Executive Assistant
+            </Text>
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+            <TouchableOpacity
+              style={[styles.presetChip, { backgroundColor: 'rgba(56,189,248,0.16)', borderColor: '#38BDF8' }]}
+              onPress={handlePlayDailyBriefing}
+              disabled={loadingBriefing}
+            >
+              <Ionicons name="volume-high" size={15} color="#38BDF8" />
+              <Text style={[styles.presetChipText, { color: '#7DD3FC', fontWeight: '700' }]}>
+                {loadingBriefing ? 'Generating...' : '🔊 Play Daily AI Briefing'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.presetChip, { backgroundColor: 'rgba(129,140,248,0.16)', borderColor: '#818CF8' }]}
+              onPress={() => setAssistantOpen(!assistantOpen)}
+            >
+              <Ionicons name="chatbubbles" size={14} color="#A5B4FC" />
+              <Text style={[styles.presetChipText, { color: '#A5B4FC', fontWeight: '700' }]}>
+                {assistantOpen ? 'Hide AI Command' : '💬 Ask / Bulk Reschedule'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {briefingText ? (
+          <View style={{ marginTop: 10, backgroundColor: '#0F172A', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#334155' }}>
+            <Text style={{ color: '#E2E8F0', fontSize: 13, lineHeight: 19 }}>
+              "{briefingText}"
+            </Text>
+          </View>
+        ) : null}
+
+        {assistantOpen && (
+          <View style={{ marginTop: 12, gap: 8 }}>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TextInput
+                style={[styles.advInput, { flex: 1 }]}
+                placeholder='e.g. "Push all my alarms back by 1 hour" or "Complete all health reminders"'
+                placeholderTextColor="#64748B"
+                value={assistantInput}
+                onChangeText={setAssistantInput}
+              />
+              <TouchableOpacity
+                style={[styles.presetChip, { backgroundColor: '#4F46E5', borderColor: '#6366F1', paddingHorizontal: 16 }]}
+                onPress={handleAskAssistant}
+                disabled={assistantBusy}
+              >
+                {assistantBusy ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 13 }}>Run AI</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            {assistantReply ? (
+              <Text style={{ color: '#6EE7B7', fontSize: 13, fontWeight: '600' }}>
+                ✨ {assistantReply}
+              </Text>
+            ) : null}
+          </View>
+        )}
+      </View>
+
+      {/* 2. One-Tap SaaS Habit & Routine Packs */}
+      <View style={{ marginBottom: 18 }}>
+        <Text style={[styles.presetsLabel, { marginBottom: 8 }]}>
+          ONE-TAP HABIT & ROUTINE PACKS (INSTANT MULTI-TIME SCHEDULES):
+        </Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={styles.presetsRow}>
+            {ROUTINE_PACKS.map((pack) => (
+              <TouchableOpacity
+                key={pack.key}
+                style={[
+                  styles.presetChip,
+                  {
+                    backgroundColor: '#1E293B',
+                    borderColor: pack.color,
+                    paddingVertical: 10,
+                    paddingHorizontal: 14,
+                    borderRadius: 14
+                  }
+                ]}
+                onPress={() => handleActivateRoutinePack(pack)}
+                disabled={creating}
+              >
+                <View>
+                  <Text style={{ color: '#F8FAFC', fontWeight: '800', fontSize: 13 }}>
+                    {pack.name}
+                  </Text>
+                  <Text style={{ color: '#94A3B8', fontSize: 11, marginTop: 2 }}>
+                    {pack.desc}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
+
+      {/* Input Composer Card (Text, Voice Note, or Photo Vision) */}
       <View style={styles.composerCard}>
         <View style={styles.modeTabs}>
           <TouchableOpacity
@@ -623,7 +934,7 @@ export default function HomeScreen({ onNavigateTab }) {
           >
             <Ionicons
               name="chatbubble-ellipses"
-              size={18}
+              size={17}
               color={inputMode === 'text' ? '#FFFFFF' : '#94A3B8'}
             />
             <Text
@@ -632,7 +943,7 @@ export default function HomeScreen({ onNavigateTab }) {
                 inputMode === 'text' && styles.modeTabTextActive
               ]}
             >
-              Text Message Input
+              Text
             </Text>
           </TouchableOpacity>
 
@@ -645,7 +956,7 @@ export default function HomeScreen({ onNavigateTab }) {
           >
             <Ionicons
               name="mic"
-              size={18}
+              size={17}
               color={inputMode === 'voice' ? '#FFFFFF' : '#94A3B8'}
             />
             <Text
@@ -654,10 +965,58 @@ export default function HomeScreen({ onNavigateTab }) {
                 inputMode === 'voice' && styles.modeTabTextActive
               ]}
             >
-              Voice Note Input
+              Voice Note
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.modeTab,
+              inputMode === 'photo' && { backgroundColor: '#0284C7' }
+            ]}
+            onPress={() => setInputMode('photo')}
+          >
+            <Ionicons
+              name="camera"
+              size={17}
+              color={inputMode === 'photo' ? '#FFFFFF' : '#94A3B8'}
+            />
+            <Text
+              style={[
+                styles.modeTabText,
+                inputMode === 'photo' && styles.modeTabTextActive
+              ]}
+            >
+              Photo Vision AI
             </Text>
           </TouchableOpacity>
         </View>
+
+        {inputMode === 'photo' && (
+          <View style={[styles.voiceRecorderBox, { borderColor: 'rgba(56,189,248,0.4)' }]}>
+            <TouchableOpacity
+              style={[styles.recordCircleBtn, { backgroundColor: '#0284C7' }]}
+              onPress={handleSelectPhotoVision}
+              disabled={scanningImage}
+            >
+              {scanningImage ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Ionicons name="camera" size={34} color="#FFFFFF" />
+              )}
+            </TouchableOpacity>
+            <Text style={styles.voiceInstruction}>
+              {scanningImage
+                ? '✨ Gemini 2.5 Vision Scanning Image...'
+                : capturedImageBase64
+                ? 'Photo Captured & Analyzed by Gemini Vision ✓'
+                : 'Snap or Upload Prescription, Bill, or Sticky Note'}
+            </Text>
+            <Text style={styles.voiceSubHint}>
+              Gemini Vision reads doctor prescriptions (1-1-1 / TDS), utility bill due dates, or whiteboard notes automatically!
+            </Text>
+          </View>
+        )}
 
         {inputMode === 'voice' && (
           <View style={styles.voiceRecorderBox}>
@@ -990,6 +1349,47 @@ export default function HomeScreen({ onNavigateTab }) {
                   Wake-Up Math Proof: {requireProof ? 'REQUIRED' : 'OFF'}
                 </Text>
               </TouchableOpacity>
+            </View>
+
+            {/* Custom Alarm Ringtone & Escalating Volume Profile */}
+            <View style={{ marginTop: 6 }}>
+              <Text style={styles.advLabel}>
+                Alarm Ringtone Profile (Includes Progressive Volume Escalation):
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                {ALARM_TONE_OPTIONS.map((tone) => {
+                  const active = selectedAlarmTone === tone.key;
+                  return (
+                    <TouchableOpacity
+                      key={tone.key}
+                      style={[
+                        styles.toggleChip,
+                        active && { backgroundColor: '#4F46E5', borderColor: '#818CF8' }
+                      ]}
+                      onPress={() => {
+                        setSelectedAlarmTone(tone.key);
+                        if (tone.key !== 'voice_loop') {
+                          previewAlarmTone(tone.key);
+                        }
+                      }}
+                    >
+                      <Ionicons
+                        name={tone.icon}
+                        size={14}
+                        color={active ? '#FFFFFF' : '#A5B4FC'}
+                      />
+                      <Text
+                        style={[
+                          styles.toggleChipText,
+                          active && { color: '#FFFFFF', fontWeight: '700' }
+                        ]}
+                      >
+                        {tone.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
           </View>
         )}
@@ -1342,12 +1742,103 @@ export default function HomeScreen({ onNavigateTab }) {
                 </TouchableOpacity>
 
                 <TouchableOpacity
+                  style={[styles.gcalChip, { backgroundColor: 'rgba(165,180,252,0.14)' }]}
+                  onPress={() => {
+                    if (editingId === rem.id) {
+                      setEditingId(null);
+                    } else {
+                      setEditingId(rem.id);
+                      setEditTitleText(rem.title);
+                      const d = new Date(rem.scheduled_at);
+                      setEditTimeText(
+                        `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                      );
+                    }
+                  }}
+                >
+                  <Ionicons name="create-outline" size={16} color="#A5B4FC" />
+                  <Text style={[styles.gcalChipText, { color: '#A5B4FC' }]}>
+                    {editingId === rem.id ? 'Close' : 'Edit / Shift'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
                   style={styles.deleteIconBtn}
                   onPress={() => deleteReminder(rem.id)}
                 >
                   <Ionicons name="trash-outline" size={18} color="#94A3B8" />
                 </TouchableOpacity>
               </View>
+
+              {/* 5. Inline Edit & Quick Time-Shift Drawer (+15m, +1h, Tomorrow, or Custom Time/Title) */}
+              {editingId === rem.id && (
+                <View style={{ marginTop: 12, backgroundColor: '#0F172A', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#334155', gap: 10 }}>
+                  <Text style={styles.advLabel}>QUICK TIME-SHIFT RESCHEDULER:</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {[
+                      { label: '+15 Mins', mins: 15 },
+                      { label: '+30 Mins', mins: 30 },
+                      { label: '+1 Hour', mins: 60 },
+                      { label: '+3 Hours', mins: 180 },
+                      { label: 'Tomorrow Same Time', mins: 1440 }
+                    ].map((sh) => (
+                      <TouchableOpacity
+                        key={sh.label}
+                        style={styles.presetChip}
+                        onPress={async () => {
+                          await editReminder(rem.id, { shiftMinutes: sh.mins });
+                          setEditingId(null);
+                          setBannerSuccess(`Shifted "${rem.title}" by ${sh.label}!`);
+                        }}
+                      >
+                        <Ionicons name="time" size={12} color="#38BDF8" />
+                        <Text style={styles.presetChipText}>{sh.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    <TextInput
+                      style={[styles.advInput, { flex: 1, minWidth: 150 }]}
+                      value={editTitleText}
+                      onChangeText={setEditTitleText}
+                      placeholder="Task title"
+                      placeholderTextColor="#64748B"
+                    />
+                    <TextInput
+                      style={[styles.advInput, { width: 95 }]}
+                      value={editTimeText}
+                      onChangeText={setEditTimeText}
+                      placeholder="HH:MM"
+                      placeholderTextColor="#64748B"
+                    />
+                    <TouchableOpacity
+                      style={[styles.presetChip, { backgroundColor: '#4F46E5', borderColor: '#6366F1' }]}
+                      onPress={async () => {
+                        let newIso = rem.scheduled_at;
+                        const m = editTimeText.trim().replace('.', ':').match(/^(\d{1,2}):(\d{2})$/);
+                        if (m) {
+                          const d = new Date(rem.scheduled_at);
+                          d.setHours(parseInt(m[1], 10), parseInt(m[2], 10), 0, 0);
+                          if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+                          newIso = d.toISOString();
+                        }
+                        await editReminder(rem.id, {
+                          title: editTitleText.trim() || rem.title,
+                          scheduledAt: newIso
+                        });
+                        setEditingId(null);
+                        setBannerSuccess(`Updated "${editTitleText.trim() || rem.title}"!`);
+                      }}
+                    >
+                      <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                      <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 12 }}>
+                        Save Edit
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
             </View>
           );
         })

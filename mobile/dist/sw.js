@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulsenote-offline-v10';
+const CACHE_NAME = 'pulsenote-offline-v11';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const PRECACHE_URLS = [
   '/icon-512.png',
   '/icon.png',
   '/favicon.ico',
-  '/_expo/static/js/web/index-2d34f55100caac7ed1b9f9cb8bf8a74b.js'
+  '/_expo/static/js/web/index-bae9b5ab8c0fa72cbae76711fc5886a5.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -47,7 +47,8 @@ self.addEventListener('push', (event) => {
       renotify: true,
       tag: `pulsenote_alarm_${data.reminderId || Date.now()}`,
       actions: [
-        { action: 'open', title: '⏰ Open & Dismiss Alarm' }
+        { action: 'complete', title: '✅ Mark Done' },
+        { action: 'snooze_10', title: '💤 Snooze 10m' }
       ],
       data
     })
@@ -55,10 +56,20 @@ self.addEventListener('push', (event) => {
 });
 
 self.addEventListener('notificationclick', (event) => {
+  const action = event.action;
+  const data = event.notification.data || {};
   event.notification.close();
+
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
+        if (action && data.reminderId) {
+          client.postMessage({
+            type: 'NOTIFICATION_ACTION',
+            action,
+            reminderId: data.reminderId
+          });
+        }
         if ('focus' in client) return client.focus();
       }
       if (self.clients.openWindow) return self.clients.openWindow('/');

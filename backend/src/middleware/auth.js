@@ -17,7 +17,7 @@ function authenticateToken(req, res, next) {
       SELECT id, name, email, plan, voice_quota_used, voice_quota_limit, reminder_limit,
              quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
              escalation_whatsapp, escalation_sms, escalation_email, phone_number,
-             streak_days, gemini_api_key, created_at
+             streak_days, gemini_api_key, alarm_tone, created_at
       FROM users WHERE id = ?
     `);
     const user = stmt.get(decoded.userId);
