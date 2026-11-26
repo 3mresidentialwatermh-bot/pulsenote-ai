@@ -208,7 +208,8 @@ export default function HomeScreen({ onNavigateTab }) {
     updateSubtasks,
     handleReminderAction,
     deleteReminder,
-    triggerAlarmNow
+    triggerAlarmNow,
+    startFocusSession
   } = useReminders();
 
   const [inputMode, setInputMode] = useState('text'); // 'text' | 'voice' | 'photo'
@@ -1723,6 +1724,23 @@ export default function HomeScreen({ onNavigateTab }) {
                 >
                   <Ionicons name="alarm-outline" size={16} color="#7DD3FC" />
                   <Text style={styles.gcalChipText}>+Phone OS Alarm</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.gcalChip,
+                    {
+                      backgroundColor: 'rgba(244,114,182,0.14)',
+                      borderColor: 'rgba(244,114,182,0.35)',
+                      borderWidth: 1
+                    }
+                  ]}
+                  onPress={() => startFocusSession(rem, 25)}
+                >
+                  <Ionicons name="timer-outline" size={16} color="#F472B6" />
+                  <Text style={[styles.gcalChipText, { color: '#F472B6' }]}>
+                    🎯 Focus 25m
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity

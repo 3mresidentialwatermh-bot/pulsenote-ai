@@ -6,6 +6,9 @@ let alarmInterval = null;
 let webAudioCtx = null;
 let currentVoiceSound = null;
 let escalationStep = 0;
+let focusTickInterval = null;
+let focusNoiseNode = null;
+let focusNoiseGain = null;
 
 /**
  * Plays synthesized alarm sound profile with progressive volume escalation:
@@ -72,7 +75,7 @@ function playTonePattern(profile = 'classic', step = 0) {
           osc.stop(now + idx * 0.16 + 0.15);
         });
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 }
 
@@ -88,7 +91,7 @@ export function speakTextAloud(text) {
       utterance.rate = 1.0;
       utterance.pitch = 1.03;
       window.speechSynthesis.speak(utterance);
-    } catch (e) {}
+    } catch (e) { }
   }
 }
 
@@ -101,7 +104,7 @@ export function stopSpokenTTS() {
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.speechSynthesis) {
     try {
       window.speechSynthesis.cancel();
-    } catch (e) {}
+    } catch (e) { }
   }
 }
 
@@ -197,7 +200,106 @@ export async function stopVoiceNotePlayback() {
   if (currentVoiceSound) {
     try {
       await currentVoiceSound.unloadAsync();
-    } catch (e) {}
+    } catch (e) { }
     currentVoiceSound = null;
   }
+}
+
+/**
+ * Ambient Focus Audio Engine for Pomodoro Deep-Work Timer
+ * Modes:
+ * - 'tick': Soft mechanical metronome/watch tick every 1 second
+ * - 'rain': Warm low-pass filtered soothing rain / brown noise
+ * - 'chime': Completion celebration harmonic chord
+ */
+export function startFocusAmbientSound(mode = 'tick') {
+  stopFocusAmbientSound();
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!webAudioCtx) {
+      webAudioCtx = new AudioContext();
+    }
+    if (webAudioCtx.state === 'suspended') {
+      webAudioCtx.resume();
+    }
+
+    if (mode === 'tick') {
+      const playSingleTick = () => {
+        try {
+          const now = webAudioCtx.currentTime;
+          const osc = webAudioCtx.createOscillator();
+          const gain = webAudioCtx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(950, now);
+          osc.frequency.exponentialRampToValueAtTime(280, now + 0.025);
+          gain.gain.setValueAtTime(0.06, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+          osc.connect(gain);
+          gain.connect(webAudioCtx.destination);
+          osc.start(now);
+          osc.stop(now + 0.035);
+        } catch (e) {}
+      };
+      playSingleTick();
+      focusTickInterval = setInterval(playSingleTick, 1000);
+    } else if (mode === 'rain') {
+      // Synthesize warm soothing brown/pink rain noise buffer
+      const bufferSize = webAudioCtx.sampleRate * 3;
+      const noiseBuffer = webAudioCtx.createBuffer(1, bufferSize, webAudioCtx.sampleRate);
+      const output = noiseBuffer.getChannelData(0);
+      let lastOut = 0.0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        output[i] = (lastOut + 0.02 * white) / 1.02;
+        lastOut = output[i];
+        output[i] *= 1.8;
+      }
+
+      const whiteNoise = webAudioCtx.createBufferSource();
+      whiteNoise.buffer = noiseBuffer;
+      whiteNoise.loop = true;
+
+      const filter = webAudioCtx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 650;
+
+      const gain = webAudioCtx.createGain();
+      gain.gain.value = 0.05;
+
+      whiteNoise.connect(filter);
+      filter.connect(gain);
+      gain.connect(webAudioCtx.destination);
+      whiteNoise.start(0);
+
+      focusNoiseNode = whiteNoise;
+      focusNoiseGain = gain;
+    }
+  } catch (e) {}
+}
+
+export function stopFocusAmbientSound() {
+  if (focusTickInterval) {
+    clearInterval(focusTickInterval);
+    focusTickInterval = null;
+  }
+  if (focusNoiseNode) {
+    try {
+      focusNoiseNode.stop();
+      focusNoiseNode.disconnect();
+    } catch (e) {}
+    focusNoiseNode = null;
+  }
+  if (focusNoiseGain) {
+    try {
+      focusNoiseGain.disconnect();
+    } catch (e) {}
+    focusNoiseGain = null;
+  }
+}
+
+export function playFocusCompleteChime() {
+  stopFocusAmbientSound();
+  playTonePattern('gentle', 4);
 }

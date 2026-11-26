@@ -30,7 +30,19 @@ export function ReminderProvider({ children }) {
     mostSnoozed: []
   });
   const [activeAlarm, setActiveAlarm] = useState(null);
+  const [focusTask, setFocusTask] = useState(null);
+  const [focusDefaultMinutes, setFocusDefaultMinutes] = useState(25);
   const [loading, setLoading] = useState(false);
+
+  function startFocusSession(reminder, minutes = 25) {
+    stopAlarmRinging();
+    setFocusDefaultMinutes(minutes);
+    setFocusTask(reminder);
+  }
+
+  function closeFocusSession() {
+    setFocusTask(null);
+  }
 
   const triggeredKeysRef = useRef(new Set());
 
@@ -798,6 +810,10 @@ export function ReminderProvider({ children }) {
         logStats,
         analytics,
         activeAlarm,
+        focusTask,
+        focusDefaultMinutes,
+        startFocusSession,
+        closeFocusSession,
         loading,
         fetchReminders,
         fetchLogs,

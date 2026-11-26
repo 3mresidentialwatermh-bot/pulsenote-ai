@@ -8,7 +8,8 @@ import {
   StyleSheet,
   Animated,
   Linking,
-  ScrollView
+  ScrollView,
+  Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -17,17 +18,21 @@ import { playVoiceNoteUrl, stopVoiceNotePlayback, speakReminderTTS } from '../ut
 
 export default function AlarmModal() {
   const { user } = useAuth();
-  const { activeAlarm, handleReminderAction, updateSubtasks } = useReminders();
+  const { activeAlarm, handleReminderAction, updateSubtasks, startFocusSession } = useReminders();
   const [playingVoice, setPlayingVoice] = useState(false);
   const [challengeAnswer, setChallengeAnswer] = useState('');
   const [challengeError, setChallengeError] = useState('');
   const [mathNums, setMathNums] = useState({ a: 7, b: 8 });
+  const [voiceControlActive, setVoiceControlActive] = useState(false);
+  const [heardCommandText, setHeardCommandText] = useState('');
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const voiceRecRef = useRef(null);
 
   useEffect(() => {
     if (activeAlarm) {
       setChallengeAnswer('');
       setChallengeError('');
+      setHeardCommandText('');
       setMathNums({
         a: Math.floor(Math.random() * 8) + 3,
         b: Math.floor(Math.random() * 8) + 4
@@ -48,10 +53,85 @@ export default function AlarmModal() {
         ])
       );
       loop.start();
+
+      // Hands-Free Voice-Controlled Alarm Dismissal ("Say 'Done' or 'Snooze' out loud")
+      let shouldRestartVoice = true;
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+          try {
+            const rec = new SpeechRecognition();
+            rec.continuous = true;
+            rec.interimResults = true;
+            rec.lang = 'en-US';
+
+            rec.onstart = () => {
+              setVoiceControlActive(true);
+            };
+
+            rec.onresult = (event) => {
+              let transcript = '';
+              for (let i = event.resultIndex; i < event.results.length; i++) {
+                transcript += event.results[i][0].transcript + ' ';
+              }
+              const cleaned = transcript.trim().toLowerCase();
+              if (!cleaned) return;
+              setHeardCommandText(cleaned);
+
+              if (
+                /\b(done|complete|completed|finish|finished|stop|dismiss|okay|ok)\b/i.test(cleaned)
+              ) {
+                shouldRestartVoice = false;
+                try {
+                  rec.stop();
+                } catch (e) {}
+                handleReminderAction(activeAlarm.id, 'complete');
+              } else if (/\b(snooze|later|wait|delay|five)\b/i.test(cleaned)) {
+                shouldRestartVoice = false;
+                try {
+                  rec.stop();
+                } catch (e) {}
+                handleReminderAction(activeAlarm.id, 'snooze', 5);
+              }
+            };
+
+            rec.onerror = () => {
+              setVoiceControlActive(false);
+            };
+
+            rec.onend = () => {
+              if (shouldRestartVoice && voiceRecRef.current) {
+                try {
+                  rec.start();
+                } catch (e) {
+                  setVoiceControlActive(false);
+                }
+              } else {
+                setVoiceControlActive(false);
+              }
+            };
+
+            rec.start();
+            voiceRecRef.current = rec;
+          } catch (e) {
+            setVoiceControlActive(false);
+          }
+        }
+      }
+
       return () => {
+        shouldRestartVoice = false;
         loop.stop();
         stopVoiceNotePlayback();
         setPlayingVoice(false);
+        setVoiceControlActive(false);
+        if (voiceRecRef.current) {
+          try {
+            voiceRecRef.current.onend = null;
+            voiceRecRef.current.stop();
+          } catch (e) {}
+          voiceRecRef.current = null;
+        }
       };
     }
   }, [activeAlarm?.id]);
@@ -121,7 +201,55 @@ export default function AlarmModal() {
 
         <Text style={styles.titleText}>{activeAlarm.title}</Text>
 
-        {/* Spoken TTS Readout Trigger + Actionable Link */}
+        {/* Hands-Free Voice-Controlled Alarm Dismissal Banner */}
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            backgroundColor: voiceControlActive
+              ? 'rgba(52,211,153,0.18)'
+              : 'rgba(255,255,255,0.1)',
+            borderWidth: 1,
+            borderColor: voiceControlActive ? '#34D399' : 'rgba(255,255,255,0.2)',
+            paddingHorizontal: 14,
+            paddingVertical: 8,
+            borderRadius: 999,
+            marginBottom: 14
+          }}
+        >
+          <Ionicons
+            name={voiceControlActive ? 'mic' : 'mic-outline'}
+            size={16}
+            color={voiceControlActive ? '#34D399' : '#A5B4FC'}
+          />
+          <Text
+            style={{
+              color: voiceControlActive ? '#6EE7B7' : '#CBD5E1',
+              fontSize: 12,
+              fontWeight: '700'
+            }}
+          >
+            {voiceControlActive
+              ? '🎙️ Hands-Free Voice Active: Say "Done" or "Snooze" out loud!'
+              : '🎙️ Voice Control: Say "Done" to complete or "Snooze" for +5m'}
+          </Text>
+        </View>
+
+        {heardCommandText ? (
+          <Text
+            style={{
+              color: '#FDE68A',
+              fontSize: 12,
+              fontStyle: 'italic',
+              marginBottom: 10
+            }}
+          >
+            Heard: "{heardCommandText}"
+          </Text>
+        ) : null}
+
+        {/* Spoken TTS Readout Trigger + Actionable Link + Start Focus Timer */}
         <View style={styles.quickActionRow}>
           <TouchableOpacity
             style={styles.ttsBtn}
@@ -129,6 +257,26 @@ export default function AlarmModal() {
           >
             <Ionicons name="volume-high" size={18} color="#38BDF8" />
             <Text style={styles.ttsBtnText}>Speak Aloud (TTS)</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.ttsBtn,
+              {
+                backgroundColor: 'rgba(244,114,182,0.18)',
+                borderColor: 'rgba(244,114,182,0.45)'
+              }
+            ]}
+            onPress={() => {
+              const target = activeAlarm;
+              handleReminderAction(activeAlarm.id, 'snooze', 25);
+              if (startFocusSession) startFocusSession(target, 25);
+            }}
+          >
+            <Ionicons name="timer-outline" size={18} color="#F472B6" />
+            <Text style={[styles.ttsBtnText, { color: '#F472B6' }]}>
+              🎯 Start 25m Focus Timer
+            </Text>
           </TouchableOpacity>
 
           {activeAlarm.action_link ? (

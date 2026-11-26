@@ -15,9 +15,11 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ReminderProvider, useReminders } from './src/context/ReminderContext';
 import AuthScreen from './src/screens/AuthScreen';
 import HomeScreen from './src/screens/HomeScreen';
+import TimelineScreen from './src/screens/TimelineScreen';
 import LogsScreen from './src/screens/LogsScreen';
 import SubscriptionScreen from './src/screens/SubscriptionScreen';
 import AlarmModal from './src/components/AlarmModal';
+import FocusTimerModal from './src/components/FocusTimerModal';
 
 function MainShell() {
   const { user, loading, isOffline } = useAuth();
@@ -80,12 +82,14 @@ function MainShell() {
       {/* Active Screen Content */}
       <View style={styles.body}>
         {activeTab === 'home' && <HomeScreen onNavigateTab={setActiveTab} />}
+        {activeTab === 'timeline' && <TimelineScreen />}
         {activeTab === 'logs' && <LogsScreen />}
         {activeTab === 'subscription' && <SubscriptionScreen />}
       </View>
 
-      {/* Persistent Full-Screen Alarm Overlay */}
+      {/* Persistent Full-Screen Alarm Overlay & Pomodoro Deep-Work Focus Modal */}
       <AlarmModal />
+      <FocusTimerModal />
 
       {/* Bottom Mobile Navigation Bar */}
       <View style={styles.bottomNav}>
@@ -111,7 +115,28 @@ function MainShell() {
               activeTab === 'home' && styles.navLabelActive
             ]}
           >
-            Reminders & Voice
+            Reminders
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.navItem}
+          onPress={() => setActiveTab('timeline')}
+        >
+          <View style={styles.navIconWrap}>
+            <Ionicons
+              name={activeTab === 'timeline' ? 'calendar' : 'calendar-outline'}
+              size={22}
+              color={activeTab === 'timeline' ? '#818CF8' : '#64748B'}
+            />
+          </View>
+          <Text
+            style={[
+              styles.navLabel,
+              activeTab === 'timeline' && styles.navLabelActive
+            ]}
+          >
+            24h Timeline
           </Text>
         </TouchableOpacity>
 
