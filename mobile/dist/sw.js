@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulsenote-offline-v8';
+const CACHE_NAME = 'pulsenote-offline-v9';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const PRECACHE_URLS = [
   '/icon-512.png',
   '/icon.png',
   '/favicon.ico',
-  '/_expo/static/js/web/index-dc8b7b24012567cce0dd41abf3576b4f.js'
+  '/_expo/static/js/web/index-8e357688f4c485d34935eccfbd71977a.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -22,6 +22,18 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow('/');
+    })
   );
 });
 

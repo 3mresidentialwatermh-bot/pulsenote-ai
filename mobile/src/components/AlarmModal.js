@@ -276,6 +276,16 @@ export default function AlarmModal() {
             {needsProof ? 'Verify Proof & Complete Task' : 'Mark Task Done & Dismiss'}
           </Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.missedDismissBtn}
+          onPress={() => handleReminderAction(activeAlarm.id, 'missed')}
+        >
+          <Ionicons name="close-circle-outline" size={18} color="#FCA5A5" />
+          <Text style={styles.missedDismissText}>
+            Dismiss Without Doing (Mark as Missed)
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </Modal>
   );
@@ -539,5 +549,19 @@ const styles = StyleSheet.create({
     color: '#064E3B',
     fontSize: 16,
     fontWeight: '800'
+  },
+  missedDismissBtn: {
+    marginTop: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6
+  },
+  missedDismissText: {
+    color: '#FCA5A5',
+    fontSize: 13,
+    fontWeight: '600'
   }
 });

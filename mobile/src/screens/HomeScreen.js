@@ -1324,14 +1324,25 @@ export default function HomeScreen({ onNavigateTab }) {
             <View key={rem.id} style={[styles.reminderCard, styles.reminderCardDim]}>
               <View style={styles.reminderTop}>
                 <Text style={styles.completedTitle}>{rem.title}</Text>
-                <Text
-                  style={[
-                    styles.completedBadge,
-                    rem.status === 'missed' && { color: '#F87171' }
-                  ]}
-                >
-                  {rem.status.toUpperCase()}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text
+                    style={[
+                      styles.completedBadge,
+                      rem.status === 'missed' && { color: '#F87171' }
+                    ]}
+                  >
+                    {rem.status.toUpperCase()}
+                  </Text>
+                  {rem.status === 'missed' && (
+                    <TouchableOpacity
+                      style={styles.testRingChip}
+                      onPress={() => triggerAlarmNow(rem)}
+                    >
+                      <Ionicons name="notifications" size={14} color="#FBBF24" />
+                      <Text style={styles.testRingText}>Ring Again</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
               <Text style={styles.reminderRaw}>"{rem.raw_input}"</Text>
             </View>

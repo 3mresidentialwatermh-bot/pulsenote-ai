@@ -169,6 +169,18 @@ export function ReminderProvider({ children }) {
     }
   }, [token, fetchReminders, fetchLogs]);
 
+  // Request system notification permission & Keep Screen Awake lock when alarms are pending
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if ('Notification' in window && window.Notification.permission === 'default') {
+        window.Notification.requestPermission().catch(() => {});
+      }
+      if ('wakeLock' in navigator && navigator.wakeLock) {
+        navigator.wakeLock.request('screen').catch(() => {});
+      }
+    }
+  }, []);
+
   // Real-time Alarm Scheduler Engine (checks every 1 second, works 100% offline!)
   useEffect(() => {
     if (!token) return;
@@ -184,7 +196,9 @@ export function ReminderProvider({ children }) {
         const triggerKey = `${rem.id}_${rem.scheduled_at}`;
 
         if (scheduledTime <= now && !triggeredKeysRef.current.has(triggerKey)) {
-          if (now - scheduledTime > 30 * 60 * 1000) {
+          // Always RING overdue alarms immediately when the user unlocks/opens the app (up to 12 hours after schedule!)
+          // instead of silently marking them missed while the phone screen was off.
+          if (now - scheduledTime > 12 * 60 * 60 * 1000) {
             triggeredKeysRef.current.add(triggerKey);
             handleReminderAction(rem.id, 'missed');
             continue;
@@ -221,6 +235,30 @@ export function ReminderProvider({ children }) {
   async function triggerAlarmNow(reminder) {
     setActiveAlarm(reminder);
     startAlarmRinging(reminder, user?.name || '');
+
+    // Fire an OS-level Android/iOS/Desktop Notification via the Service Worker so it pops up over the status bar!
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        if (window.Notification.permission === 'granted') {
+          if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.ready;
+            await reg.showNotification(`⏰ PulseNote Alarm: ${reminder.title}`, {
+              body: reminder.raw_input || 'Tap to view, snooze, or complete your task!',
+              icon: '/icon-192.png',
+              badge: '/icon-192.png',
+              vibrate: [500, 300, 500, 300, 500],
+              requireInteraction: true,
+              tag: `alarm_${reminder.id}`
+            });
+          } else {
+            new window.Notification(`⏰ PulseNote Alarm: ${reminder.title}`, {
+              body: reminder.raw_input || 'Tap to open alarm!'
+            });
+          }
+        }
+      } catch (e) {}
+    }
+
     if (Platform.OS !== 'web') {
       Vibration.vibrate([500, 500, 500], true);
     }
