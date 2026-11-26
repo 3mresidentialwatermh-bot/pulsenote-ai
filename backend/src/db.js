@@ -101,5 +101,17 @@ safeAddColumn('reminders', "subtasks_json TEXT DEFAULT '[]'");
 safeAddColumn('reminders', "assigned_to_email TEXT DEFAULT ''");
 safeAddColumn('reminders', "require_proof INTEGER NOT NULL DEFAULT 0");
 safeAddColumn('reminders', "tts_enabled INTEGER NOT NULL DEFAULT 1");
+safeAddColumn('reminders', "push_sent_at TEXT DEFAULT ''");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    endpoint TEXT UNIQUE NOT NULL,
+    subscription_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
 
 module.exports = db;

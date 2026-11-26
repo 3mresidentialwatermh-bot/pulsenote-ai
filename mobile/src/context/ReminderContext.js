@@ -169,17 +169,57 @@ export function ReminderProvider({ children }) {
     }
   }, [token, fetchReminders, fetchLogs]);
 
-  // Request system notification permission & Keep Screen Awake lock when alarms are pending
+  // Request system notification permission, subscribe to Web Push (FCM/APNs background wake-up!), & Keep Screen Awake lock
   useEffect(() => {
+    if (!token || token.startsWith('offline-token')) return;
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if ('Notification' in window && window.Notification.permission === 'default') {
-        window.Notification.requestPermission().catch(() => {});
-      }
       if ('wakeLock' in navigator && navigator.wakeLock) {
         navigator.wakeLock.request('screen').catch(() => {});
       }
+
+      (async () => {
+        try {
+          if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+          let perm = window.Notification.permission;
+          if (perm === 'default') {
+            perm = await window.Notification.requestPermission();
+          }
+          if (perm !== 'granted') return;
+
+          const reg = await navigator.serviceWorker.ready;
+          if (!reg.pushManager) return;
+
+          const vapidRes = await apiRequest('/api/auth/vapid-public-key');
+          if (!vapidRes || !vapidRes.publicKey) return;
+
+          // Convert URL-safe base64 VAPID public key to Uint8Array
+          const padding = '='.repeat((4 - (vapidRes.publicKey.length % 4)) % 4);
+          const base64 = (vapidRes.publicKey + padding).replace(/-/g, '+').replace(/_/g, '/');
+          const rawData = window.atob(base64);
+          const applicationServerKey = new Uint8Array(rawData.length);
+          for (let i = 0; i < rawData.length; ++i) {
+            applicationServerKey[i] = rawData.charCodeAt(i);
+          }
+
+          let sub = await reg.pushManager.getSubscription();
+          if (!sub) {
+            sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey
+            });
+          }
+
+          await apiRequest('/api/auth/push-subscribe', {
+            method: 'POST',
+            token,
+            body: { subscription: sub }
+          });
+        } catch (err) {
+          // Push subscription optional
+        }
+      })();
     }
-  }, []);
+  }, [token]);
 
   // Real-time Alarm Scheduler Engine (checks every 1 second, works 100% offline!)
   useEffect(() => {

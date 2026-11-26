@@ -76,6 +76,47 @@ function openGoogleCalendarExport(reminder) {
   Linking.openURL(url);
 }
 
+/**
+ * Generates and triggers an instant .ics Native OS Calendar Alarm file with a 0-minute VALARM AUDIO trigger!
+ * On Android & iPhone, opening this .ics adds a hardware OS alarm that rings even if the phone is locked AND offline.
+ */
+function exportNativeDeviceAlarmIcs(reminder) {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    openGoogleCalendarExport(reminder);
+    return;
+  }
+  const start = new Date(reminder.scheduled_at);
+  const end = new Date(start.getTime() + 15 * 60 * 1000);
+  const fmt = (d) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  const icsContent = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//PulseNote AI//Smart Reminder SaaS//EN',
+    'BEGIN:VEVENT',
+    `UID:pulsenote_${reminder.id}@pulsenote.ai`,
+    `DTSTAMP:${fmt(new Date())}`,
+    `DTSTART:${fmt(start)}`,
+    `DTEND:${fmt(end)}`,
+    `SUMMARY:⏰ ${reminder.title}`,
+    `DESCRIPTION:${(reminder.raw_input || '').replace(/\n/g, ' ')}`,
+    'BEGIN:VALARM',
+    'TRIGGER:-PT0M',
+    'ACTION:DISPLAY',
+    `DESCRIPTION:⏰ PulseNote Alarm: ${reminder.title}`,
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+
+  const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `pulsenote_alarm_${reminder.id}.ics`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function HomeScreen({ onNavigateTab }) {
   const { user } = useAuth();
   const {
@@ -1278,10 +1319,10 @@ export default function HomeScreen({ onNavigateTab }) {
 
                 <TouchableOpacity
                   style={styles.gcalChip}
-                  onPress={() => openGoogleCalendarExport(rem)}
+                  onPress={() => exportNativeDeviceAlarmIcs(rem)}
                 >
-                  <Ionicons name="calendar-outline" size={16} color="#7DD3FC" />
-                  <Text style={styles.gcalChipText}>+Calendar</Text>
+                  <Ionicons name="alarm-outline" size={16} color="#7DD3FC" />
+                  <Text style={styles.gcalChipText}>+Phone OS Alarm</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity

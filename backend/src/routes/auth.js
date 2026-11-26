@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { authenticateToken, JWT_SECRET } = require('../middleware/auth');
+const { VAPID_PUBLIC_KEY, savePushSubscription } = require('../services/pushService');
 
 const router = express.Router();
 
@@ -167,6 +168,22 @@ router.post('/subscription', authenticateToken, (req, res) => {
   } catch (err) {
     console.error('Subscription update error:', err);
     res.status(500).json({ error: 'Failed to update subscription plan.' });
+  }
+});
+
+// Get VAPID public key for background Web Push wake-up alarms
+router.get('/vapid-public-key', (req, res) => {
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// Subscribe device for background Web Push wake-up alarms (works when screen is locked or app is closed!)
+router.post('/push-subscribe', authenticateToken, (req, res) => {
+  try {
+    const { subscription } = req.body;
+    savePushSubscription(req.user.id, subscription);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save push subscription.' });
   }
 });
 

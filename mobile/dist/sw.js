@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulsenote-offline-v9';
+const CACHE_NAME = 'pulsenote-offline-v10';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const PRECACHE_URLS = [
   '/icon-512.png',
   '/icon.png',
   '/favicon.ico',
-  '/_expo/static/js/web/index-8e357688f4c485d34935eccfbd71977a.js'
+  '/_expo/static/js/web/index-2d34f55100caac7ed1b9f9cb8bf8a74b.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -22,6 +22,35 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
+  );
+});
+
+// Background Web Push Wake-Up Handler: Wakes up the phone even when the screen is locked and app is closed!
+self.addEventListener('push', (event) => {
+  let data = {
+    title: '⏰ PulseNote Alarm Ringing!',
+    body: 'Tap to open, snooze, or complete your scheduled task!'
+  };
+  try {
+    if (event.data) {
+      data = event.data.json();
+    }
+  } catch (e) {}
+
+  event.waitUntil(
+    self.registration.showNotification(data.title || '⏰ PulseNote Alarm', {
+      body: data.body || 'Tap to view alarm',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      vibrate: [500, 250, 500, 250, 500, 250, 800],
+      requireInteraction: true,
+      renotify: true,
+      tag: `pulsenote_alarm_${data.reminderId || Date.now()}`,
+      actions: [
+        { action: 'open', title: '⏰ Open & Dismiss Alarm' }
+      ],
+      data
+    })
   );
 });
 

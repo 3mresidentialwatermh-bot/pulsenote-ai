@@ -7,6 +7,7 @@ const fs = require('fs');
 const authRoutes = require('./src/routes/auth');
 const reminderRoutes = require('./src/routes/reminders');
 const logRoutes = require('./src/routes/logs');
+const { startBackgroundPushCron } = require('./src/services/pushService');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -43,4 +44,5 @@ if (fs.existsSync(webDistPath)) {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Reminder SaaS Backend running on http://localhost:${PORT}`);
+  startBackgroundPushCron();
 });
