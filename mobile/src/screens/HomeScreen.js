@@ -156,15 +156,32 @@ function openGoogleCalendarExport(reminder) {
 }
 
 /**
- * Generates and triggers an instant .ics Native OS Calendar Alarm file with a 0-minute VALARM AUDIO trigger!
- * On Android & iPhone, opening this .ics adds a hardware OS alarm that rings even if the phone is locked AND offline.
+ * Sets a real hardware Phone Clock / Calendar Alarm so the phone rings at full volume
+ * EVEN IF the app is completely closed, swiped away, screen is locked, and internet is off!
+ * - On Android: Also supports launching the native Android Clock app (`android.intent.action.SET_ALARM`)
+ * - On all platforms: Generates a 0-minute VALARM `.ics` hardware alarm entry
  */
-function exportNativeDeviceAlarmIcs(reminder) {
+function exportNativeDeviceAlarmIcs(reminder, useAndroidClockIntent = false) {
+  const start = new Date(reminder.scheduled_at);
+  const hour = start.getHours();
+  const minutes = start.getMinutes();
+
+  if (
+    useAndroidClockIntent &&
+    Platform.OS === 'web' &&
+    typeof window !== 'undefined' &&
+    /android/i.test(navigator.userAgent || '')
+  ) {
+    const msg = encodeURIComponent(`PulseNote: ${reminder.title}`);
+    const intentUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;i.android.intent.extra.alarm.HOUR=${hour};i.android.intent.extra.alarm.MINUTES=${minutes};S.android.intent.extra.alarm.MESSAGE=${msg};B.android.intent.extra.alarm.SKIP_UI=false;end`;
+    window.location.href = intentUrl;
+    return;
+  }
+
   if (Platform.OS !== 'web' || typeof window === 'undefined') {
     openGoogleCalendarExport(reminder);
     return;
   }
-  const start = new Date(reminder.scheduled_at);
   const end = new Date(start.getTime() + 15 * 60 * 1000);
   const fmt = (d) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   const icsContent = [
@@ -178,6 +195,10 @@ function exportNativeDeviceAlarmIcs(reminder) {
     `DTEND:${fmt(end)}`,
     `SUMMARY:⏰ ${reminder.title}`,
     `DESCRIPTION:${(reminder.raw_input || '').replace(/\n/g, ' ')}`,
+    'BEGIN:VALARM',
+    'TRIGGER:-PT0M',
+    'ACTION:AUDIO',
+    'END:VALARM',
     'BEGIN:VALARM',
     'TRIGGER:-PT0M',
     'ACTION:DISPLAY',
@@ -209,8 +230,11 @@ export default function HomeScreen({ onNavigateTab }) {
     handleReminderAction,
     deleteReminder,
     triggerAlarmNow,
-    startFocusSession
+    startFocusSession,
+    pushStatus,
+    registerBackgroundPush
   } = useReminders();
+  const [autoSyncOsAlarm, setAutoSyncOsAlarm] = useState(false);
 
   const [inputMode, setInputMode] = useState('text'); // 'text' | 'voice' | 'photo'
   const [rawText, setRawText] = useState('');
@@ -734,6 +758,9 @@ export default function HomeScreen({ onNavigateTab }) {
               result.reminder.scheduled_at
             ).toLocaleTimeString()}${result.quietHoursAdjusted ? ' (Adjusted for Quiet Hours)' : ''}`
       );
+      if (autoSyncOsAlarm && result?.reminder) {
+        exportNativeDeviceAlarmIcs(result.reminder, true);
+      }
     } catch (err) {
       setBannerError(err.message || 'Could not create reminder.');
     } finally {
@@ -811,6 +838,135 @@ export default function HomeScreen({ onNavigateTab }) {
             <Ionicons name="arrow-up-right-box-outline" size={14} color="#A5B4FC" />
           </TouchableOpacity>
         )}
+      </View>
+
+      {/* Lock-Screen & Closed-App Alarm Wake-Up Control Bar */}
+      <View
+        style={[
+          styles.composerCard,
+          {
+            backgroundColor:
+              pushStatus === 'enabled'
+                ? 'rgba(16, 185, 129, 0.12)'
+                : 'rgba(245, 158, 11, 0.14)',
+            borderColor:
+              pushStatus === 'enabled'
+                ? 'rgba(52, 211, 153, 0.4)'
+                : 'rgba(251, 191, 36, 0.5)',
+            paddingVertical: 12
+          }
+        ]}
+      >
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 10
+          }}
+        >
+          <View style={{ flex: 1, minWidth: 210 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons
+                name={
+                  pushStatus === 'enabled'
+                    ? 'notifications-circle'
+                    : 'alert-circle'
+                }
+                size={18}
+                color={pushStatus === 'enabled' ? '#34D399' : '#FBBF24'}
+              />
+              <Text
+                style={{
+                  color: '#F8FAFC',
+                  fontSize: 13,
+                  fontWeight: '800'
+                }}
+              >
+                {pushStatus === 'enabled'
+                  ? '🔔 Lock-Screen Background Push Active'
+                  : '⚠️ Enable Closed-App & Lock-Screen Alarms'}
+              </Text>
+            </View>
+            <Text style={{ color: '#CBD5E1', fontSize: 11, marginTop: 3 }}>
+              {pushStatus === 'enabled'
+                ? 'Background Web Push + Service Worker timers are active. For 100% offline hardware clock ringing when app is swiped closed, enable Auto Phone Clock Sync.'
+                : 'Tap "Enable Background Push" below so your phone wakes up even when the app is minimized or screen is locked!'}
+            </Text>
+          </View>
+
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {pushStatus !== 'enabled' && (
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  {
+                    backgroundColor: '#F59E0B',
+                    borderColor: '#FBBF24',
+                    paddingVertical: 8,
+                    paddingHorizontal: 12
+                  }
+                ]}
+                onPress={async () => {
+                  const ok = await registerBackgroundPush(true);
+                  if (ok) {
+                    setBannerSuccess(
+                      'Lock-Screen Background Push Notifications enabled & connected!'
+                    );
+                  } else {
+                    setBannerError(
+                      'Please allow Notifications in your browser/phone settings for lock-screen alarms.'
+                    );
+                  }
+                }}
+              >
+                <Ionicons name="notifications" size={14} color="#0F172A" />
+                <Text
+                  style={{
+                    color: '#0F172A',
+                    fontWeight: '800',
+                    fontSize: 12
+                  }}
+                >
+                  Enable Background Push
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={[
+                styles.presetChip,
+                {
+                  backgroundColor: autoSyncOsAlarm
+                    ? '#0284C7'
+                    : 'rgba(56,189,248,0.15)',
+                  borderColor: '#38BDF8',
+                  paddingVertical: 8,
+                  paddingHorizontal: 12
+                }
+              ]}
+              onPress={() => setAutoSyncOsAlarm(!autoSyncOsAlarm)}
+            >
+              <Ionicons
+                name="alarm"
+                size={14}
+                color={autoSyncOsAlarm ? '#FFFFFF' : '#38BDF8'}
+              />
+              <Text
+                style={{
+                  color: autoSyncOsAlarm ? '#FFFFFF' : '#7DD3FC',
+                  fontWeight: '700',
+                  fontSize: 12
+                }}
+              >
+                {autoSyncOsAlarm
+                  ? '⏰ Auto Phone Clock Sync: ON'
+                  : '⏰ Auto Phone Clock Sync: OFF'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
 
       {/* 1. AI Daily Executive Briefing + Conversational AI Assistant Bar */}
@@ -1720,10 +1876,18 @@ export default function HomeScreen({ onNavigateTab }) {
 
                 <TouchableOpacity
                   style={styles.gcalChip}
-                  onPress={() => exportNativeDeviceAlarmIcs(rem)}
+                  onPress={() => exportNativeDeviceAlarmIcs(rem, true)}
                 >
                   <Ionicons name="alarm-outline" size={16} color="#7DD3FC" />
-                  <Text style={styles.gcalChipText}>+Phone OS Alarm</Text>
+                  <Text style={styles.gcalChipText}>⏰ Set Phone Clock</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.gcalChip}
+                  onPress={() => exportNativeDeviceAlarmIcs(rem, false)}
+                >
+                  <Ionicons name="calendar-outline" size={15} color="#7DD3FC" />
+                  <Text style={styles.gcalChipText}>+Calendar .ics</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity

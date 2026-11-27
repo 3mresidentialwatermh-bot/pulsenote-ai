@@ -32,6 +32,7 @@ export function ReminderProvider({ children }) {
   const [activeAlarm, setActiveAlarm] = useState(null);
   const [focusTask, setFocusTask] = useState(null);
   const [focusDefaultMinutes, setFocusDefaultMinutes] = useState(25);
+  const [pushStatus, setPushStatus] = useState('checking'); // 'checking' | 'enabled' | 'prompt' | 'denied' | 'unsupported'
   const [loading, setLoading] = useState(false);
 
   function startFocusSession(reminder, minutes = 25) {
@@ -181,69 +182,117 @@ export function ReminderProvider({ children }) {
     }
   }, [token, fetchReminders, fetchLogs]);
 
+  // Sync reminders list into the Service Worker so background timers & Notification Triggers can fire even when tab is minimized
+  useEffect(() => {
+    if (
+      Platform.OS === 'web' &&
+      typeof navigator !== 'undefined' &&
+      'serviceWorker' in navigator
+    ) {
+      navigator.serviceWorker.ready
+        .then((reg) => {
+          if (reg.active) {
+            reg.active.postMessage({
+              type: 'SYNC_REMINDERS',
+              reminders: reminders.filter(
+                (r) => r.status === 'pending' || r.status === 'snoozed'
+              )
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  }, [reminders]);
+
+  const registerBackgroundPush = useCallback(
+    async (requestUserGesture = false) => {
+      if (Platform.OS !== 'web' || typeof window === 'undefined') {
+        setPushStatus('unsupported');
+        return false;
+      }
+      try {
+        if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+          setPushStatus('unsupported');
+          return false;
+        }
+        let perm = window.Notification.permission;
+        if (perm === 'default' && requestUserGesture) {
+          perm = await window.Notification.requestPermission();
+        }
+        if (perm === 'default') {
+          setPushStatus('prompt');
+          return false;
+        }
+        if (perm !== 'granted') {
+          setPushStatus('denied');
+          return false;
+        }
+
+        setPushStatus('enabled');
+
+        const reg = await navigator.serviceWorker.ready;
+        if (!reg.pushManager) return true;
+
+        const vapidRes = await apiRequest('/api/auth/vapid-public-key');
+        if (!vapidRes || !vapidRes.publicKey) return true;
+
+        const padding = '='.repeat((4 - (vapidRes.publicKey.length % 4)) % 4);
+        const base64 = (vapidRes.publicKey + padding)
+          .replace(/-/g, '+')
+          .replace(/_/g, '/');
+        const rawData = window.atob(base64);
+        const applicationServerKey = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) {
+          applicationServerKey[i] = rawData.charCodeAt(i);
+        }
+
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey
+          });
+        }
+
+        await apiRequest('/api/auth/push-subscribe', {
+          method: 'POST',
+          body: {
+            subscription: sub,
+            userId: user?.id || 'broadcast'
+          }
+        });
+        return true;
+      } catch (err) {
+        return false;
+      }
+    },
+    [user?.id]
+  );
+
   // Request system notification permission, subscribe to Web Push (FCM/APNs background wake-up!), & Keep Screen Awake lock
   useEffect(() => {
-    if (!token || token.startsWith('offline-token')) return;
+    if (!token) return;
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       if ('wakeLock' in navigator && navigator.wakeLock) {
         navigator.wakeLock.request('screen').catch(() => {});
       }
 
-      (async () => {
-        try {
-          if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
-          let perm = window.Notification.permission;
-          if (perm === 'default') {
-            perm = await window.Notification.requestPermission();
-          }
-          if (perm !== 'granted') return;
-
-          const reg = await navigator.serviceWorker.ready;
-          if (!reg.pushManager) return;
-
-          const vapidRes = await apiRequest('/api/auth/vapid-public-key');
-          if (!vapidRes || !vapidRes.publicKey) return;
-
-          // Convert URL-safe base64 VAPID public key to Uint8Array
-          const padding = '='.repeat((4 - (vapidRes.publicKey.length % 4)) % 4);
-          const base64 = (vapidRes.publicKey + padding).replace(/-/g, '+').replace(/_/g, '/');
-          const rawData = window.atob(base64);
-          const applicationServerKey = new Uint8Array(rawData.length);
-          for (let i = 0; i < rawData.length; ++i) {
-            applicationServerKey[i] = rawData.charCodeAt(i);
-          }
-
-          let sub = await reg.pushManager.getSubscription();
-          if (!sub) {
-            sub = await reg.pushManager.subscribe({
-              userVisibleOnly: true,
-              applicationServerKey
-            });
-          }
-
-          // Listen for Lock-Screen Notification Action Clicks ('complete' or 'snooze_10') from Service Worker
-          navigator.serviceWorker.addEventListener('message', (event) => {
-            const msg = event.data;
-            if (msg && msg.type === 'NOTIFICATION_ACTION' && msg.reminderId) {
-              if (msg.action === 'complete') {
-                handleReminderAction(msg.reminderId, 'complete');
-              } else if (msg.action === 'snooze_10') {
-                handleReminderAction(msg.reminderId, 'snooze', 10);
-              }
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          const msg = event.data;
+          if (msg && msg.type === 'NOTIFICATION_ACTION' && msg.reminderId) {
+            if (msg.action === 'complete') {
+              handleReminderAction(msg.reminderId, 'complete');
+            } else if (msg.action === 'snooze_10') {
+              handleReminderAction(msg.reminderId, 'snooze', 10);
             }
-          });
+          }
+        });
+      }
 
-          await apiRequest('/api/auth/push-subscribe', {
-            method: 'POST',
-            token,
-            body: { subscription: sub }
-          });
-        } catch (err) {
-          // Push subscription optional
-        }
-      })();
+      registerBackgroundPush(false);
     }
-  }, [token]);
+  }, [token, registerBackgroundPush]);
 
   // Real-time Alarm Scheduler Engine (checks every 1 second, works 100% offline!)
   useEffect(() => {
@@ -814,6 +863,8 @@ export function ReminderProvider({ children }) {
         focusDefaultMinutes,
         startFocusSession,
         closeFocusSession,
+        pushStatus,
+        registerBackgroundPush,
         loading,
         fetchReminders,
         fetchLogs,

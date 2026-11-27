@@ -34,9 +34,14 @@ function savePushSubscription(userId, subscription) {
 }
 
 async function dispatchPushForReminder(reminder) {
-  const subs = db
+  let subs = db
     .prepare('SELECT * FROM push_subscriptions WHERE user_id = ?')
     .all(reminder.user_id);
+
+  // Fallback to all registered device subscriptions if the device subscribed while in offline-token mode
+  if (!subs || subs.length === 0) {
+    subs = db.prepare('SELECT * FROM push_subscriptions').all();
+  }
 
   if (!subs || subs.length === 0) return;
 

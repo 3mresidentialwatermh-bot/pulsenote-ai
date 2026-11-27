@@ -179,11 +179,11 @@ router.get('/vapid-public-key', (req, res) => {
   res.json({ publicKey: VAPID_PUBLIC_KEY });
 });
 
-// Subscribe device for background Web Push wake-up alarms (works when screen is locked or app is closed!)
-router.post('/push-subscribe', authenticateToken, (req, res) => {
+// Subscribe device for background Web Push wake-up alarms (works even if user logged in offline earlier!)
+router.post('/push-subscribe', (req, res) => {
   try {
-    const { subscription } = req.body;
-    savePushSubscription(req.user.id, subscription);
+    const { subscription, userId } = req.body;
+    savePushSubscription(userId || 'broadcast', subscription);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to save push subscription.' });

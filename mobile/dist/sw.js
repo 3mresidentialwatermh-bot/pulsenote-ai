@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulsenote-offline-v12';
+const CACHE_NAME = 'pulsenote-offline-v13';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -7,8 +7,10 @@ const PRECACHE_URLS = [
   '/icon-512.png',
   '/icon.png',
   '/favicon.ico',
-  '/_expo/static/js/web/index-7522a4ed02b4268eecb3a94909c4ba25.js'
+  '/_expo/static/js/web/index-7c943798880eaf5a50c960c313dcea1a.js'
 ];
+
+const scheduledTimers = new Map();
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -25,7 +27,66 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Background Web Push Wake-Up Handler: Wakes up the phone even when the screen is locked and app is closed!
+// Receive synced reminders from the app and schedule background Service Worker timers + OS Notification Triggers
+self.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg || msg.type !== 'SYNC_REMINDERS' || !Array.isArray(msg.reminders)) return;
+
+  for (const [, timerId] of scheduledTimers.entries()) {
+    clearTimeout(timerId);
+  }
+  scheduledTimers.clear();
+
+  const now = Date.now();
+  for (const rem of msg.reminders) {
+    if (rem.status !== 'pending' && rem.status !== 'snoozed') continue;
+    const dueTime = new Date(rem.scheduled_at).getTime();
+    const delayMs = dueTime - now;
+    if (delayMs <= 0 || delayMs > 24 * 60 * 60 * 1000) continue;
+
+    // 1. If device supports Chromium TimestampTrigger (OS-scheduled offline notifications)
+    if ('showTrigger' in Notification.prototype && typeof TimestampTrigger !== 'undefined') {
+      try {
+        self.registration.showNotification(`⏰ PulseNote Alarm: ${rem.title}`, {
+          body: rem.raw_input || 'Time to complete your scheduled task!',
+          icon: '/icon-192.png',
+          badge: '/icon-192.png',
+          tag: `pulsenote_alarm_${rem.id}`,
+          showTrigger: new TimestampTrigger(dueTime),
+          vibrate: [500, 250, 500, 250, 500, 250, 800],
+          requireInteraction: true,
+          actions: [
+            { action: 'complete', title: '✅ Mark Done' },
+            { action: 'snooze_10', title: '💤 Snooze 10m' }
+          ],
+          data: { reminderId: rem.id }
+        });
+      } catch (e) {}
+    }
+
+    // 2. Schedule Service Worker background timeout (fires while SW stays alive in background)
+    const timerId = setTimeout(() => {
+      self.registration.showNotification(`⏰ PulseNote Alarm: ${rem.title}`, {
+        body: rem.raw_input || 'Tap to open, snooze, or complete your task!',
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        vibrate: [500, 250, 500, 250, 500, 250, 800],
+        requireInteraction: true,
+        renotify: true,
+        tag: `pulsenote_alarm_${rem.id}`,
+        actions: [
+          { action: 'complete', title: '✅ Mark Done' },
+          { action: 'snooze_10', title: '💤 Snooze 10m' }
+        ],
+        data: { reminderId: rem.id }
+      }).catch(() => {});
+    }, delayMs);
+
+    scheduledTimers.set(rem.id, timerId);
+  }
+});
+
+// Background Web Push Wake-Up Handler: Wakes up the phone via FCM/APNs even when screen is locked and app is closed!
 self.addEventListener('push', (event) => {
   let data = {
     title: '⏰ PulseNote Alarm Ringing!',
