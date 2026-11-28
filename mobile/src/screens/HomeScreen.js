@@ -229,6 +229,7 @@ export default function HomeScreen({ onNavigateTab }) {
     updateSubtasks,
     handleReminderAction,
     deleteReminder,
+    deleteBulkReminders,
     triggerAlarmNow,
     startFocusSession,
     pushStatus,
@@ -1709,10 +1710,44 @@ export default function HomeScreen({ onNavigateTab }) {
       </ScrollView>
 
       {/* Active / Upcoming Alarms List */}
-      <View style={styles.sectionHeaderRow}>
+      <View
+        style={[
+          styles.sectionHeaderRow,
+          {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8
+          }
+        ]}
+      >
         <Text style={styles.sectionTitle}>
           Active & Upcoming Alarms ({upcomingReminders.length})
         </Text>
+        {upcomingReminders.length > 1 && (
+          <TouchableOpacity
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 5,
+              backgroundColor: 'rgba(239, 68, 68, 0.16)',
+              borderWidth: 1,
+              borderColor: 'rgba(239, 68, 68, 0.45)',
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: 8
+            }}
+            onPress={() =>
+              deleteBulkReminders(upcomingReminders.map((r) => r.id))
+            }
+          >
+            <Ionicons name="trash-outline" size={14} color="#F87171" />
+            <Text style={{ color: '#FCA5A5', fontSize: 11, fontWeight: '700' }}>
+              Delete All ({upcomingReminders.length})
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {upcomingReminders.length === 0 ? (
@@ -1945,10 +1980,20 @@ export default function HomeScreen({ onNavigateTab }) {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={styles.deleteIconBtn}
+                  style={[
+                    styles.gcalChip,
+                    {
+                      backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                      borderWidth: 1,
+                      borderColor: 'rgba(239, 68, 68, 0.45)'
+                    }
+                  ]}
                   onPress={() => deleteReminder(rem.id)}
                 >
-                  <Ionicons name="trash-outline" size={18} color="#94A3B8" />
+                  <Ionicons name="trash-outline" size={16} color="#F87171" />
+                  <Text style={[styles.gcalChipText, { color: '#FCA5A5' }]}>
+                    Delete
+                  </Text>
                 </TouchableOpacity>
               </View>
 
@@ -2029,16 +2074,49 @@ export default function HomeScreen({ onNavigateTab }) {
       {/* Recently Completed / Missed */}
       {completedOrMissed.length > 0 && (
         <>
-          <View style={[styles.sectionHeaderRow, { marginTop: 22 }]}>
+          <View
+            style={[
+              styles.sectionHeaderRow,
+              {
+                marginTop: 22,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 8
+              }
+            ]}
+          >
             <Text style={styles.sectionTitle}>
               Recently Completed / Missed ({completedOrMissed.length})
             </Text>
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 5,
+                backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                borderWidth: 1,
+                borderColor: 'rgba(239, 68, 68, 0.45)',
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 8
+              }}
+              onPress={() =>
+                deleteBulkReminders(completedOrMissed.map((r) => r.id))
+              }
+            >
+              <Ionicons name="trash-outline" size={14} color="#F87171" />
+              <Text style={{ color: '#FCA5A5', fontSize: 11, fontWeight: '700' }}>
+                Clear All ({completedOrMissed.length})
+              </Text>
+            </TouchableOpacity>
           </View>
-          {completedOrMissed.slice(0, 5).map((rem) => (
+          {completedOrMissed.slice(0, 10).map((rem) => (
             <View key={rem.id} style={[styles.reminderCard, styles.reminderCardDim]}>
               <View style={styles.reminderTop}>
-                <Text style={styles.completedTitle}>{rem.title}</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={[styles.completedTitle, { flex: 1 }]}>{rem.title}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <Text
                     style={[
                       styles.completedBadge,
@@ -2056,6 +2134,22 @@ export default function HomeScreen({ onNavigateTab }) {
                       <Text style={styles.testRingText}>Ring Again</Text>
                     </TouchableOpacity>
                   )}
+                  <TouchableOpacity
+                    style={[
+                      styles.testRingChip,
+                      {
+                        backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                        borderColor: 'rgba(239, 68, 68, 0.45)',
+                        borderWidth: 1
+                      }
+                    ]}
+                    onPress={() => deleteReminder(rem.id)}
+                  >
+                    <Ionicons name="trash-outline" size={14} color="#F87171" />
+                    <Text style={[styles.testRingText, { color: '#FCA5A5' }]}>
+                      Delete
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               </View>
               <Text style={styles.reminderRaw}>"{rem.raw_input}"</Text>

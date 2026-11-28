@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulsenote-offline-v13';
+const CACHE_NAME = 'pulsenote-offline-v14';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const PRECACHE_URLS = [
   '/icon-512.png',
   '/icon.png',
   '/favicon.ico',
-  '/_expo/static/js/web/index-7c943798880eaf5a50c960c313dcea1a.js'
+  '/_expo/static/js/web/index-60d17d09ffe30cd26fc311dd073f45b1.js'
 ];
 
 const scheduledTimers = new Map();

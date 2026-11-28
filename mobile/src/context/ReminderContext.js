@@ -807,6 +807,17 @@ export function ReminderProvider({ children }) {
   }
 
   async function deleteReminder(reminderId) {
+    stopAlarmRinging();
+    if (Platform.OS !== 'web') {
+      Vibration.cancel();
+    }
+    if (activeAlarm && activeAlarm.id === reminderId) {
+      setActiveAlarm(null);
+    }
+    if (focusTask && focusTask.id === reminderId) {
+      setFocusTask(null);
+    }
+
     try {
       if (token && !token.startsWith('offline-token')) {
         await apiRequest(`/api/reminders/${reminderId}`, {
@@ -829,6 +840,30 @@ export function ReminderProvider({ children }) {
       });
     }
     await saveLocalCache(nextReminders, nextLogs);
+  }
+
+  async function deleteBulkReminders(reminderIds = []) {
+    if (!Array.isArray(reminderIds) || reminderIds.length === 0) return;
+    stopAlarmRinging();
+    if (activeAlarm && reminderIds.includes(activeAlarm.id)) {
+      setActiveAlarm(null);
+    }
+    for (const id of reminderIds) {
+      try {
+        if (token && !token.startsWith('offline-token')) {
+          await apiRequest(`/api/reminders/${id}`, {
+            method: 'DELETE',
+            token
+          });
+        }
+      } catch (e) {}
+    }
+    const idSet = new Set(reminderIds);
+    const nextReminders = reminders.filter((r) => !idSet.has(r.id));
+    await saveLocalCache(nextReminders, logs);
+    if (token && !token.startsWith('offline-token')) {
+      await Promise.all([fetchReminders(), fetchLogs(), refreshUser()]).catch(() => {});
+    }
   }
 
   async function exportLogsCsv() {
@@ -876,6 +911,7 @@ export function ReminderProvider({ children }) {
         updateSubtasks,
         handleReminderAction,
         deleteReminder,
+        deleteBulkReminders,
         triggerAlarmNow,
         exportLogsCsv
       }}

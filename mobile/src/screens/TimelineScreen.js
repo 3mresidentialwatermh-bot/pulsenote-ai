@@ -87,6 +87,7 @@ export default function TimelineScreen() {
     reminders,
     createReminder,
     handleReminderAction,
+    deleteReminder,
     startFocusSession,
     triggerAlarmNow
   } = useReminders();
@@ -454,6 +455,31 @@ export default function TimelineScreen() {
                               color="#FBBF24"
                             />
                             <Text style={styles.actionSmallText}>Ring</Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.actionSmallChip,
+                              {
+                                backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                                borderColor: 'rgba(239, 68, 68, 0.45)'
+                              }
+                            ]}
+                            onPress={() => deleteReminder(rem.id)}
+                          >
+                            <Ionicons
+                              name="trash-outline"
+                              size={13}
+                              color="#F87171"
+                            />
+                            <Text
+                              style={[
+                                styles.actionSmallText,
+                                { color: '#FCA5A5', fontWeight: '700' }
+                              ]}
+                            >
+                              Delete
+                            </Text>
                           </TouchableOpacity>
                         </View>
                       </View>

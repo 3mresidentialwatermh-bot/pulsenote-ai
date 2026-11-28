@@ -18,7 +18,13 @@ import { playVoiceNoteUrl, stopVoiceNotePlayback, speakReminderTTS } from '../ut
 
 export default function AlarmModal() {
   const { user } = useAuth();
-  const { activeAlarm, handleReminderAction, updateSubtasks, startFocusSession } = useReminders();
+  const {
+    activeAlarm,
+    handleReminderAction,
+    deleteReminder,
+    updateSubtasks,
+    startFocusSession
+  } = useReminders();
   const [playingVoice, setPlayingVoice] = useState(false);
   const [challengeAnswer, setChallengeAnswer] = useState('');
   const [challengeError, setChallengeError] = useState('');
@@ -432,6 +438,25 @@ export default function AlarmModal() {
           <Ionicons name="close-circle-outline" size={18} color="#FCA5A5" />
           <Text style={styles.missedDismissText}>
             Dismiss Without Doing (Mark as Missed)
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.missedDismissBtn,
+            {
+              marginTop: 6,
+              backgroundColor: 'rgba(239, 68, 68, 0.18)',
+              borderWidth: 1,
+              borderColor: 'rgba(239, 68, 68, 0.45)',
+              borderRadius: 12
+            }
+          ]}
+          onPress={() => deleteReminder(activeAlarm.id)}
+        >
+          <Ionicons name="trash-outline" size={18} color="#F87171" />
+          <Text style={[styles.missedDismissText, { color: '#FCA5A5', fontWeight: '700' }]}>
+            Delete This Alarm Permanently
           </Text>
         </TouchableOpacity>
       </ScrollView>
